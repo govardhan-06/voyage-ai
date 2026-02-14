@@ -1,0 +1,224 @@
+.container {
+    min-height: calc(100vh - 64px);
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 40px 24px;
+}
+
+.progressBar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    margin-bottom: 48px;
+}
+
+.progressStep {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    cursor: default;
+    opacity: 0.4;
+    transition: all var(--transition-fast);
+}
+
+.progressStepActive {
+    opacity: 1;
+}
+
+.progressStepDone {
+    opacity: 0.7;
+    cursor: pointer;
+}
+
+.progressStepDone:hover {
+    opacity: 1;
+}
+
+.progressIcon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-full);
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    transition: all var(--transition-fast);
+}
+
+.progressStepActive .progressIcon {
+    background: var(--primary-600);
+    border-color: var(--primary-500);
+    color: #fff;
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
+}
+
+.progressStepDone .progressIcon {
+    background: rgba(34, 197, 94, 0.15);
+    border-color: var(--success-500);
+    color: var(--success-500);
+}
+
+.progressLabel {
+    font-size: 0.6875rem;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.progressStepActive .progressLabel {
+    color: var(--primary-400);
+}
+
+.content {
+    background: var(--bg-glass);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xl);
+    padding: 40px;
+    box-shadow: var(--shadow-lg);
+}
+
+.stepContent h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+}
+
+.stepDesc {
+    font-size: 0.9375rem;
+    color: var(--text-secondary);
+    margin-bottom: 28px;
+}
+
+.budgetInputs {
+    display: flex;
+    align-items: flex-end;
+    gap: 16px;
+}
+
+.budgetInputs .input {
+    width: 100%;
+}
+
+.budgetDivider {
+    font-size: 0.875rem;
+    color: var(--text-tertiary);
+    padding-bottom: 12px;
+}
+
+.chipGrid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.riskSection {
+    margin-top: 32px;
+}
+
+.riskOptions {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+}
+
+.riskCard {
+    padding: 16px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-card);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    text-align: center;
+}
+
+.riskCard:hover {
+    border-color: var(--border-default);
+}
+
+.riskCardActive {
+    border-color: var(--primary-500);
+    background: rgba(99, 102, 241, 0.1);
+}
+
+.riskLabel {
+    font-weight: 600;
+    font-size: 0.9375rem;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.riskDesc {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.navButtons {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 32px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.errorText {
+    color: var(--error-500);
+    font-size: 0.875rem;
+    margin-top: 16px;
+    text-align: center;
+}
+
+.spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@media (max-width: 768px) {
+    .progressBar {
+        gap: 0;
+    }
+
+    .progressStep {
+        padding: 8px 8px;
+    }
+
+    .progressLabel {
+        display: none;
+    }
+
+    .content {
+        padding: 24px;
+    }
+
+    .budgetInputs {
+        flex-direction: column;
+    }
+
+    .budgetDivider {
+        text-align: center;
+        padding: 0;
+    }
+
+    .riskOptions {
+        grid-template-columns: 1fr;
+    }
+}
