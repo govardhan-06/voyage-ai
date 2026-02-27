@@ -1,14 +1,19 @@
 """Trip planning API endpoints – Session-based chat with human-in-the-loop.
 
-Uses LangGraph's interrupt_before + MemorySaver for two pause points:
+Uses LangGraph's interrupt_before + MemorySaver for four pause points:
 1. After intent_slot (when slots incomplete → graph ends, API detects & prompts user)
-2. Before review node (interrupt_before → graph pauses with draft itinerary)
+2. Before flight_selection (pause to show flights for selection)
+3. Before hotel_selection (pause to show hotels for selection)
+4. Before review node (interrupt_before → graph pauses with draft itinerary)
+
+All amounts are in INR (Indian Rupees).
 """
 
 import uuid
 from typing import Optional
 from datetime import datetime
 from fastapi import APIRouter, Body, Query, HTTPException, status
+from fastapi.responses import JSONResponse
 from bson import ObjectId
 from src.database import get_database
 from src.agent.graph import travel_graph
@@ -135,6 +140,30 @@ def _get_latest_ai_message(state: dict) -> str:
     return "Your trip has been planned!"
 
 
+def _parse_selection_index(message: str) -> Optional[int]:
+    """
+    Try to parse a 1-based selection index from user message.
+    Returns the integer if found, else None.
+    Accepts: "1", "option 2", "number 3", "pick 4", etc.
+    """
+    msg = message.strip()
+    # Try direct integer parse
+    try:
+        idx = int(msg)
+        if 1 <= idx <= 10:
+            return idx
+    except ValueError:
+        pass
+    
+    # Try extracting the first number from the message
+    import re
+    numbers = re.findall(r'\b([1-9])\b', msg)
+    if numbers:
+        return int(numbers[0])
+    
+    return None
+
+
 @router.post("/chat")
 async def chat(
     user_id: str = Body(..., description="User ID"),
@@ -148,14 +177,18 @@ async def chat(
     1. No thread_id → starts a new planning session
     2. With thread_id → examines current graph state and:
        a. If clarifying → adds user message to state, re-runs intent_slot
-       b. If reviewing → updates review_status/feedback, resumes graph
-       c. If complete → returns final data
+       b. If selecting_flight → validates selection, resumes graph
+       c. If selecting_hotel → validates selection, resumes graph
+       d. If reviewing → updates review_status/feedback, resumes graph
+       e. If complete → returns final data
     
     Response status:
-    - "clarifying" → agent needs more info, show message + input
-    - "planning"   → planner + itinerary gen are running
-    - "reviewing"  → draft itinerary ready for user review
-    - "complete"   → trip finalized, itinerary ready
+    - "clarifying"       → agent needs more info, show message + input
+    - "planning"         → planner + tools are running
+    - "selecting_flight" → show flight options, wait for user to pick a number
+    - "selecting_hotel"  → show hotel options, wait for user to pick a number
+    - "reviewing"        → draft itinerary ready for user review
+    - "complete"         → trip finalized, itinerary ready
     """
     
     # Generate or use provided thread_id
@@ -180,6 +213,11 @@ async def chat(
                 "tool_plan": [],
                 "tool_results": {},
                 "trip_strategy": {},
+                "available_flights": [],
+                "available_hotels": [],
+                "selected_flight": {},
+                "selected_hotel": {},
+                "selection_step": "",
                 "itinerary": {},
                 "review_status": "",
                 "review_feedback": "",
@@ -195,13 +233,75 @@ async def chat(
             current_state = state_snapshot.values
             next_nodes = state_snapshot.next  # tuple of next node names
             
-            if next_nodes and "review" in next_nodes:
+            if next_nodes and "flight_selection" in next_nodes:
+                # Graph is paused before FLIGHT_SELECTION node
+                available_flights = current_state.get("available_flights", [])
+                selection_idx = _parse_selection_index(message)
+                
+                if selection_idx and available_flights and 1 <= selection_idx <= len(available_flights):
+                    # Valid selection — update state with chosen flight
+                    chosen = available_flights[selection_idx - 1]
+                    await travel_graph.aupdate_state(
+                        config,
+                        {
+                            "selected_flight": chosen,
+                            "messages": [{"role": "user", "content": message}]
+                        }
+                    )
+                else:
+                    # Invalid selection or text input — prompt again
+                    return {
+                        "status": "selecting_flight",
+                        "thread_id": thread_id,
+                        "message": (
+                            f"Please reply with a number between 1 and {len(available_flights)} "
+                            f"to select your flight. For example, reply '1' to choose the first option."
+                        ),
+                        "data": {
+                            "available_flights": available_flights,
+                        }
+                    }
+                
+                # Resume execution
+                result = await travel_graph.ainvoke(None, config=config)
+            
+            elif next_nodes and "hotel_selection" in next_nodes:
+                # Graph is paused before HOTEL_SELECTION node
+                available_hotels = current_state.get("available_hotels", [])
+                selection_idx = _parse_selection_index(message)
+                
+                if selection_idx and available_hotels and 1 <= selection_idx <= len(available_hotels):
+                    # Valid selection — update state with chosen hotel
+                    chosen = available_hotels[selection_idx - 1]
+                    await travel_graph.aupdate_state(
+                        config,
+                        {
+                            "selected_hotel": chosen,
+                            "messages": [{"role": "user", "content": message}]
+                        }
+                    )
+                else:
+                    # Invalid selection — prompt again
+                    return {
+                        "status": "selecting_hotel",
+                        "thread_id": thread_id,
+                        "message": (
+                            f"Please reply with a number between 1 and {len(available_hotels)} "
+                            f"to select your hotel. For example, reply '1' to choose the first option."
+                        ),
+                        "data": {
+                            "available_hotels": available_hotels,
+                        }
+                    }
+                
+                # Resume execution
+                result = await travel_graph.ainvoke(None, config=config)
+            
+            elif next_nodes and "review" in next_nodes:
                 # Graph is paused before the REVIEW node
-                # User is responding to the draft itinerary
                 response_lower = message.strip().lower()
                 
-                if response_lower in ("approve", "yes", "looks good", "confirm", "ok", "lgtm", "perfect"):
-                    # User approved — update state and resume
+                if response_lower in ("approve", "yes", "looks good", "confirm", "ok", "lgtm", "perfect", "approved"):
                     await travel_graph.aupdate_state(
                         config,
                         {
@@ -211,7 +311,6 @@ async def chat(
                         }
                     )
                 else:
-                    # User wants revision — update state with feedback and resume
                     await travel_graph.aupdate_state(
                         config,
                         {
@@ -227,8 +326,6 @@ async def chat(
             else:
                 # Graph ended after intent_slot (clarification needed)
                 # OR graph completed but user is sending a follow-up
-                
-                # Update the state with the new user message and re-run
                 await travel_graph.aupdate_state(
                     config,
                     {
@@ -245,6 +342,33 @@ async def chat(
         final_state = state_snapshot.values
         next_nodes = state_snapshot.next
         
+        # Check if graph is paused before flight_selection
+        if next_nodes and "flight_selection" in next_nodes:
+            available_flights = final_state.get("available_flights", [])
+            return {
+                "status": "selecting_flight",
+                "thread_id": thread_id,
+                "message": _get_latest_ai_message(final_state),
+                "data": {
+                    "available_flights": available_flights,
+                    "trip_request": final_state.get("trip_request", {}),
+                }
+            }
+        
+        # Check if graph is paused before hotel_selection
+        if next_nodes and "hotel_selection" in next_nodes:
+            available_hotels = final_state.get("available_hotels", [])
+            return {
+                "status": "selecting_hotel",
+                "thread_id": thread_id,
+                "message": _get_latest_ai_message(final_state),
+                "data": {
+                    "available_hotels": available_hotels,
+                    "selected_flight": final_state.get("selected_flight", {}),
+                    "trip_request": final_state.get("trip_request", {}),
+                }
+            }
+        
         # Check if graph is paused before review (draft ready)
         if next_nodes and "review" in next_nodes:
             return {
@@ -260,6 +384,8 @@ async def chat(
                     "itinerary": final_state.get("itinerary", {}),
                     "trip_request": final_state.get("trip_request", {}),
                     "trip_strategy": final_state.get("trip_strategy", {}),
+                    "selected_flight": final_state.get("selected_flight", {}),
+                    "selected_hotel": final_state.get("selected_hotel", {}),
                 }
             }
         
@@ -285,6 +411,8 @@ async def chat(
                     "itinerary_version_id": final_state.get("itinerary_version_id", ""),
                     "itinerary": final_state.get("itinerary", {}),
                     "trip_request": final_state.get("trip_request", {}),
+                    "selected_flight": final_state.get("selected_flight", {}),
+                    "selected_hotel": final_state.get("selected_hotel", {}),
                 }
             }
         
@@ -353,3 +481,224 @@ async def get_trip_conversations(trip_id: str):
     
     conversation["_id"] = str(conversation["_id"])
     return conversation
+
+
+# ── Export Endpoint ──
+
+@router.get("/{trip_id}/export")
+async def export_itinerary(
+    trip_id: str,
+    format: str = Query("json", description="Export format: 'json' or 'text'")
+):
+    """
+    Export a finalized itinerary.
+    
+    Returns a structured export of the trip including:
+    - Trip metadata (destination, dates, travelers)
+    - Selected flight details
+    - Selected hotel details
+    - Day-by-day itinerary with activities
+    - Cost breakdown in INR
+    
+    Query params:
+    - format=json (default): Returns structured JSON
+    - format=text: Returns a human-readable plain text version
+    """
+    db = get_database()
+    
+    # Fetch trip
+    try:
+        trip = await db.trips.find_one({"_id": ObjectId(trip_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid trip ID")
+    
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    
+    # Fetch latest itinerary version
+    version = await db.itinerary_versions.find_one(
+        {"trip_id": trip_id},
+        sort=[("version_number", -1)]
+    )
+    
+    if not version:
+        raise HTTPException(status_code=404, detail="No itinerary found for this trip")
+    
+    itinerary = version.get("itinerary", {})
+    constraints = trip.get("trip_constraints", {})
+    selected_flight = trip.get("selected_flight") or itinerary.get("selected_flight") or {}
+    selected_hotel = trip.get("selected_hotel") or itinerary.get("selected_hotel") or {}
+    
+    # ── Build cost breakdown ──
+    days = itinerary.get("days", [])
+    day_costs = []
+    total_activity_cost = 0
+    for day in days:
+        day_cost = sum(act.get("cost_estimate", 0) for act in day.get("activities", []))
+        day_costs.append({"day": day.get("day_number"), "date": day.get("date"), "cost_inr": day_cost})
+        total_activity_cost += day_cost
+    
+    flight_cost = selected_flight.get("price_inr", 0) if not selected_flight.get("assumption") else 0
+    hotel_cost = selected_hotel.get("price_inr", 0) or selected_hotel.get("best_price_inr", 0) if not selected_hotel.get("assumption") else 0
+    grand_total = itinerary.get("total_cost_estimate", total_activity_cost + flight_cost + hotel_cost)
+    
+    if format == "text":
+        # ── Plain text export ──
+        lines = [
+            "=" * 60,
+            f"  VOYAGE AI – TRIP ITINERARY",
+            "=" * 60,
+            f"  Trip: {trip.get('title', 'Your Trip')}",
+            f"  Destination: {constraints.get('destination', 'N/A')}",
+            f"  From: {constraints.get('origin', 'N/A')}",
+            f"  Dates: {constraints.get('start_date', 'N/A')} to {constraints.get('end_date', 'N/A')}",
+            f"  Duration: {constraints.get('duration_days', 'N/A')} days",
+            f"  Travelers: {constraints.get('traveler_count', 1)} ({constraints.get('travel_group', 'solo')})",
+            f"  Currency: INR (₹)",
+            "",
+        ]
+        
+        # Flight section
+        if selected_flight and not selected_flight.get("assumption"):
+            lines += [
+                "✈️  FLIGHT DETAILS",
+                "-" * 40,
+                f"  Airline: {selected_flight.get('airline', 'N/A')} {selected_flight.get('flight_number', '')}",
+                f"  Class: {selected_flight.get('booking_class', 'ECONOMY')}",
+                f"  Departure: {selected_flight.get('departure_time', 'N/A')}",
+                f"  Arrival: {selected_flight.get('arrival_time', 'N/A')}",
+                f"  Duration: {selected_flight.get('duration', 'N/A')}",
+                f"  Stops: {selected_flight.get('stops', 0)}",
+                f"  Price: ₹{flight_cost:,.0f}",
+                "",
+            ]
+        else:
+            lines += [
+                "✈️  FLIGHT DETAILS",
+                "-" * 40,
+                "  ⚠️  Economy class assumed – please book via your preferred airline.",
+                "",
+            ]
+        
+        # Hotel section
+        if selected_hotel and not selected_hotel.get("assumption"):
+            lines += [
+                "🏨  HOTEL DETAILS",
+                "-" * 40,
+                f"  Name: {selected_hotel.get('name', 'N/A')}",
+                f"  Room: {selected_hotel.get('room_type', 'Standard')} | {selected_hotel.get('bed_type', '')}",
+                f"  Check-in: {selected_hotel.get('check_in', 'N/A')}",
+                f"  Check-out: {selected_hotel.get('check_out', 'N/A')}",
+                f"  Total Price: ₹{hotel_cost:,.0f}",
+                "",
+            ]
+        else:
+            lines += [
+                "🏨  HOTEL DETAILS",
+                "-" * 40,
+                "  ⚠️  3-star hotel assumed – please book via MakeMyTrip, Booking.com, etc.",
+                "",
+            ]
+        
+        # Day-by-day itinerary
+        lines += [
+            "📅  DAY-BY-DAY ITINERARY",
+            "=" * 60,
+        ]
+        
+        for day in days:
+            lines += [
+                f"\n  Day {day.get('day_number')} – {day.get('date', '')}  |  Theme: {day.get('theme', '')}",
+                "-" * 40,
+            ]
+            for act in day.get("activities", []):
+                cost_str = f"  [₹{act.get('cost_estimate', 0):,.0f}]" if act.get("cost_estimate", 0) > 0 else ""
+                loc = act.get("location", {})
+                loc_name = loc.get("name", "") if isinstance(loc, dict) else act.get("location_name", "")
+                lines.append(f"  {act.get('time', '')}  {act.get('title', '')}{cost_str}")
+                if loc_name:
+                    lines.append(f"           📍 {loc_name}")
+                if act.get("description"):
+                    lines.append(f"           {act.get('description')}")
+        
+        # Cost summary
+        lines += [
+            "",
+            "💰  COST SUMMARY (INR)",
+            "=" * 60,
+        ]
+        for dc in day_costs:
+            lines.append(f"  Day {dc['day']} ({dc['date']}): ₹{dc['cost_inr']:,.0f}")
+        
+        if flight_cost > 0:
+            lines.append(f"  Flights: ₹{flight_cost:,.0f}")
+        if hotel_cost > 0:
+            lines.append(f"  Hotel: ₹{hotel_cost:,.0f}")
+        lines += [
+            "-" * 40,
+            f"  TOTAL ESTIMATE: ₹{grand_total:,.0f}",
+            "",
+        ]
+        
+        # Assumptions
+        assumptions = itinerary.get("assumptions", [])
+        if assumptions:
+            lines += ["⚠️  ASSUMPTIONS MADE", "-" * 40]
+            for a in assumptions:
+                lines.append(f"  • {a}")
+            lines.append("")
+        
+        lines += [
+            "=" * 60,
+            "  Generated by Voyage AI – Your AI Travel Companion",
+            "=" * 60,
+        ]
+        
+        text_content = "\n".join(lines)
+        return JSONResponse(
+            content={"text": text_content},
+            headers={"Content-Disposition": f'attachment; filename="itinerary_{trip_id}.txt"'},
+        )
+    
+    # ── JSON export (default) ──
+    export_data = {
+        "export_info": {
+            "generated_at": datetime.utcnow().isoformat(),
+            "trip_id": trip_id,
+            "version": version.get("version_number", 1),
+            "currency": "INR",
+        },
+        "trip": {
+            "title": trip.get("title", ""),
+            "destination": constraints.get("destination", ""),
+            "origin": constraints.get("origin", ""),
+            "start_date": constraints.get("start_date", ""),
+            "end_date": constraints.get("end_date", ""),
+            "duration_days": constraints.get("duration_days", 0),
+            "travel_group": constraints.get("travel_group", ""),
+            "traveler_count": constraints.get("traveler_count", 1),
+            "budget_inr": constraints.get("budget", 0),
+        },
+        "selected_flight": selected_flight,
+        "selected_hotel": selected_hotel,
+        "itinerary": {
+            "title": itinerary.get("title", ""),
+            "summary": itinerary.get("summary", ""),
+            "currency": "INR",
+            "assumptions": itinerary.get("assumptions", []),
+            "days": days,
+        },
+        "cost_summary": {
+            "currency": "INR",
+            "flight_cost_inr": flight_cost,
+            "hotel_cost_inr": hotel_cost,
+            "activity_cost_inr": total_activity_cost,
+            "total_estimate_inr": grand_total,
+            "daily_breakdown": day_costs,
+        },
+    }
+    
+    return JSONResponse(
+        content=export_data,
+        headers={"Content-Disposition": f'attachment; filename="itinerary_{trip_id}.json"'},
+    )

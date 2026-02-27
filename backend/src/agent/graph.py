@@ -1,12 +1,14 @@
 """LangGraph assembly – Human-in-the-Loop with Checkpointing.
 
-Uses interrupt_before pattern for two pause points:
-1. Before intent_slot (when looping for clarification)
-2. Before review (to show draft itinerary for approval)
+Uses interrupt_before pattern for four pause points:
+1. Before flight_selection (to show flight options for user to pick)
+2. Before hotel_selection (to show hotel options for user to pick)
+3. Before review (to show draft itinerary for approval)
 
 Graph flow:
   initializer → intent_slot → (loop via interrupt | proceed)
-    → planner → itinerary_gen → review → (approve → finalizer | revise → planner)
+    → planner → flight_selection → hotel_selection
+    → itinerary_gen → review → (approve → finalizer | revise → planner)
     → finalizer → END
 """
 
@@ -16,6 +18,8 @@ from src.agent.state import AgentState
 from src.agent.nodes.initializer import initializer_node
 from src.agent.nodes.intent_slot import intent_slot_node
 from src.agent.nodes.planner import planner_node
+from src.agent.nodes.flight_selection import flight_selection_node
+from src.agent.nodes.hotel_selection import hotel_selection_node
 from src.agent.nodes.itinerary_gen import itinerary_gen_node
 from src.agent.nodes.review import review_node
 from src.agent.nodes.finalizer import finalizer_node
@@ -54,6 +58,8 @@ def build_travel_graph():
     graph.add_node("initializer", initializer_node)
     graph.add_node("intent_slot", intent_slot_node)
     graph.add_node("planner", planner_node)
+    graph.add_node("flight_selection", flight_selection_node)
+    graph.add_node("hotel_selection", hotel_selection_node)
     graph.add_node("itinerary_gen", itinerary_gen_node)
     graph.add_node("review", review_node)
     graph.add_node("finalizer", finalizer_node)
@@ -74,7 +80,10 @@ def build_travel_graph():
         }
     )
     
-    graph.add_edge("planner", "itinerary_gen")
+    # planner → flight_selection → hotel_selection → itinerary_gen
+    graph.add_edge("planner", "flight_selection")
+    graph.add_edge("flight_selection", "hotel_selection")
+    graph.add_edge("hotel_selection", "itinerary_gen")
     graph.add_edge("itinerary_gen", "review")
     
     # review → finalizer (approved) or → planner (revision)
@@ -89,11 +98,11 @@ def build_travel_graph():
     
     graph.add_edge("finalizer", END)
     
-    # Compile with checkpointer + interrupt before review node
+    # Compile with checkpointer + interrupt before selection and review nodes
     checkpointer = MemorySaver()
     return graph.compile(
         checkpointer=checkpointer,
-        interrupt_before=["review"]  # Pause before review to show draft itinerary
+        interrupt_before=["flight_selection", "hotel_selection", "review"]
     )
 
 

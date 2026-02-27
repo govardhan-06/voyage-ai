@@ -16,7 +16,8 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
-    LLM_MODEL: str = "gemini-2.5-flash"
+    # LLM_MODEL: str = "gemini-2.5-flash"
+    LLM_MODEL: str = "gemini-3-flash-preview"
 
     AMADEUS_API_KEY: str = os.getenv("AMADEUS_API_KEY", "")
     AMADEUS_API_SECRET: str = os.getenv("AMADEUS_API_SECRET", "")

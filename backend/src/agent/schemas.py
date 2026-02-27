@@ -10,10 +10,10 @@ class SlotFillingResponse(BaseModel):
     destination: Optional[str] = Field(None, description="Travel destination city or country")
     destination_iata: Optional[str] = Field(None, description="IATA airport/city code for destination (e.g. NRT, CDG, DPS)")
     origin: Optional[str] = Field(None, description="Departure city where the user is traveling from")
-    origin_iata: Optional[str] = Field(None, description="IATA airport/city code for origin (e.g. JFK, DEL, BOM)")
+    origin_iata: Optional[str] = Field(None, description="IATA airport/city code for origin (e.g. BOM, DEL, BLR)")
     duration_days: Optional[int] = Field(None, description="Number of days for the trip")
-    budget_min: Optional[float] = Field(None, description="Minimum budget in USD")
-    budget_max: Optional[float] = Field(None, description="Maximum budget in USD")
+    budget_min: Optional[float] = Field(None, description="Minimum budget in INR (Indian Rupees)")
+    budget_max: Optional[float] = Field(None, description="Maximum budget in INR (Indian Rupees)")
     travel_group: Optional[str] = Field(None, description="solo, couple, family, or friends")
     traveler_count: Optional[int] = Field(None, description="Number of travelers")
     start_date: Optional[str] = Field(None, description="Trip start date (YYYY-MM-DD)")
@@ -50,10 +50,50 @@ class PlannerLLMResponse(BaseModel):
     summary: str = Field("", description="High-level travel strategy, refined each round")
     selected_cities: List[str] = Field(default_factory=list, description="Cities to visit in order")
     key_experiences: List[str] = Field(default_factory=list, description="Must-do experiences")
-    budget_allocation: dict = Field(default_factory=dict, description="Budget split: flights, hotels, activities, food, misc")
-    cost_estimates: dict = Field(default_factory=dict, description="Estimated costs from tool results: flights, hotels, activities, total")
+    budget_allocation: dict = Field(default_factory=dict, description="Budget split in INR: flights, hotels, activities, food, misc")
+    cost_estimates: dict = Field(default_factory=dict, description="Estimated costs in INR from tool results: flights, hotels, activities, total")
     recommendations: List[str] = Field(default_factory=list, description="Top recommendations")
     warnings: List[str] = Field(default_factory=list, description="Important warnings or caveats")
+
+
+# ── Node 2.5 / 2.6: Flight & Hotel Selection ──
+
+class FlightSegment(BaseModel):
+    """A single flight segment."""
+    departure_airport: str = ""
+    departure_time: str = ""
+    arrival_airport: str = ""
+    arrival_time: str = ""
+    carrier: str = ""
+    flight_number: str = ""
+    duration: str = ""
+
+class FlightOption(BaseModel):
+    """A selectable flight option presented to the user."""
+    index: int = Field(..., description="1-based index for user selection")
+    flight_id: str = ""
+    airline: str = ""
+    flight_number: str = ""
+    departure_time: str = ""
+    arrival_time: str = ""
+    duration: str = ""
+    stops: int = 0
+    price_inr: float = 0
+    booking_class: str = "ECONOMY"
+    seats_remaining: str = "N/A"
+
+class HotelOption(BaseModel):
+    """A selectable hotel option presented to the user."""
+    index: int = Field(..., description="1-based index for user selection")
+    hotel_id: str = ""
+    name: str = ""
+    city: str = ""
+    price_per_night_inr: float = 0
+    total_price_inr: float = 0
+    room_type: str = ""
+    bed_type: str = ""
+    check_in: str = ""
+    check_out: str = ""
 
 
 # ── Node 3: Itinerary Generation ──
@@ -67,7 +107,7 @@ class ItineraryActivity(BaseModel):
     location_address: Optional[str] = Field(None, description="Address")
     latitude: Optional[float] = None
     longitude: Optional[float] = None
-    cost_estimate: float = Field(0, description="Estimated cost in trip currency")
+    cost_estimate: float = Field(0, description="Estimated cost in INR (Indian Rupees)")
     tags: List[str] = Field(default_factory=list, description="Tags like 'food', 'culture', 'adventure'")
 
 class ItineraryDay(BaseModel):
@@ -81,8 +121,13 @@ class GeneratedItinerary(BaseModel):
     """Complete itinerary output from Node 3."""
     
     title: str = Field(..., description="Trip title")
-    total_cost_estimate: float = Field(0, description="Total estimated cost")
-    currency: str = Field("USD", description="Currency code")
+    total_cost_estimate: float = Field(0, description="Total estimated cost in INR")
+    currency: str = Field("INR", description="Currency code — always INR for Indian users")
     summary: str = Field("", description="Brief trip summary")
     days: List[ItineraryDay] = Field(default_factory=list)
     reasoning: List[str] = Field(default_factory=list, description="Key reasoning for major decisions")
+    
+    # Selected travel options (populated after human-in-the-loop selection)
+    selected_flight: Optional[dict] = Field(None, description="User-selected flight details")
+    selected_hotel: Optional[dict] = Field(None, description="User-selected hotel details")
+    assumptions: List[str] = Field(default_factory=list, description="Assumptions made during planning (e.g., economy class)")

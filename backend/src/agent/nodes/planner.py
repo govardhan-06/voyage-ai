@@ -29,7 +29,7 @@ TOOL_REGISTRY = {
     "search_hotels": search_hotels,
 }
 
-PLANNER_SYSTEM_PROMPT = """You are the travel planner for Voyage AI. You plan trips by iteratively gathering data through tools.
+PLANNER_SYSTEM_PROMPT = """You are the travel planner for Voyage AI — an AI travel assistant specifically designed for Indian travelers.
 
 ## Trip Requirements
 {trip_request}
@@ -59,16 +59,24 @@ You are in an iterative loop. Each round you respond with a JSON object:
 1. **If you need more data**: Set `stop: false` and provide `tool_requests` with the tools you want to call. You will receive the results in the next round.
 2. **If you have all the data you need**: Set `stop: true`, leave `tool_requests` empty, and fill in your final strategy fields (summary, selected_cities, key_experiences, budget_allocation, cost_estimates, recommendations, warnings).
 
+## Standard Assumptions (state these clearly in your warnings list)
+- Flights: Economy class unless user specifies otherwise
+- Hotels: 3-star or mid-range equivalent unless user specifies otherwise
+- Rooms: 1 room for solo/couple, separate rooms for groups of 3+
+- All cost estimates are in INR (Indian Rupees ₹)
+
 ## Rules
 - Use the IATA codes already provided in the trip requirements (`origin_iata`, `destination_iata`). Do NOT pass full city names to tools.
 - Try to call search_flights and search_hotels to get real pricing data.
-- **If a tool call fails or returns an error, do NOT retry it. Continue planning using your own knowledge and provide reasonable cost estimates based on your training data.** The plan must succeed even without tool data.
+- **If a tool call fails or returns an error, do NOT retry it. Continue planning using your own knowledge and provide reasonable cost estimates in INR.** The plan must succeed even without tool data.
 - You can call multiple tools in a single round.
 - Refine your strategy as you receive more data. Each round should build on the last.
 - Max {max_rounds} rounds — make efficient use of each one.
-- Be specific and realistic with cost estimates.
+- All budget and cost estimates MUST be in INR (₹). Do not use USD.
+- Be specific and realistic with cost estimates for Indian travelers.
 - Do NOT generate the day-by-day itinerary — that's the next node's job.
 - For attractions, restaurants, and local info, use your built-in knowledge.
+- Add your assumptions to the `warnings` list so users are aware.
 
 ## Response Schema (JSON)
 {schema}
@@ -272,16 +280,36 @@ IMPORTANT: Focus on addressing the user's feedback. You may call tools again if 
     
     strategy_dict = final_strategy.dict(exclude={"tool_requests", "stop"})
     
+    # ── Extract available flights and hotels for user selection ──
+    available_flights = []
+    available_hotels = []
+    
+    flight_data = all_tool_results.get("search_flights", {})
+    if isinstance(flight_data, list):
+        flight_data = flight_data[-1] if flight_data else {}
+    if isinstance(flight_data, dict):
+        available_flights = flight_data.get("flights", [])
+    
+    hotel_data = all_tool_results.get("search_hotels", {})
+    if isinstance(hotel_data, list):
+        hotel_data = hotel_data[-1] if hotel_data else {}
+    if isinstance(hotel_data, dict):
+        available_hotels = hotel_data.get("hotels", [])
+    
     return {
         "tool_plan": all_tool_calls,
         "tool_results": all_tool_results,
         "trip_strategy": strategy_dict,
-        "current_node": "itinerary_gen",
+        "available_flights": available_flights,
+        "available_hotels": available_hotels,
+        "selected_flight": {},  # reset selection for re-planning
+        "selected_hotel": {},   # reset selection for re-planning
+        "current_node": "flight_selection",
         "messages": [{
             "role": "ai",
             "content": (
                 f"Planning complete! I researched your trip across {len(all_tool_calls)} tool calls. "
-                f"Now generating your day-by-day itinerary..."
+                f"All prices are in INR (₹). Let me now help you pick your flights and hotel!"
             )
         }]
     }

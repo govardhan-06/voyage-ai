@@ -21,6 +21,17 @@ class AgentState(TypedDict):
     tool_results: dict           # results from tool execution
     trip_strategy: dict          # high-level strategy
     
+    # Node 2.5: Flight Selection (human-in-the-loop)
+    available_flights: list      # flight options from search
+    selected_flight: dict        # user-chosen flight
+    
+    # Node 2.6: Hotel Selection (human-in-the-loop)
+    available_hotels: list       # hotel options from search
+    selected_hotel: dict         # user-chosen hotel
+    
+    # Selection tracking
+    selection_step: str          # "" | "awaiting_flight" | "awaiting_hotel"
+    
     # Node 3: Itinerary Generation
     itinerary: dict              # generated day-wise itinerary
     
@@ -34,5 +45,3 @@ class AgentState(TypedDict):
     
     # Routing
     current_node: str            # current node for conditional edges
-
-    #TEST

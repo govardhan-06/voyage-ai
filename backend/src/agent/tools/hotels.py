@@ -1,6 +1,7 @@
 """Real hotel search using Amadeus Hotel Search API.
 
 Results are cached in Redis for 30 minutes to reduce API calls.
+All prices are in INR (Indian Rupees).
 """
 
 import json
@@ -32,44 +33,48 @@ def _build_cache_key(city_code, checkin, checkout, guests, radius, radius_unit) 
 
 
 def _cache_get(cache_key: str):
-    """Try to get a cached result from Redis."""
+    """Try to get a cached result from Redis (sync-safe)."""
     try:
         redis = get_redis_client()
         if not redis:
             return None
         import asyncio
+
+        async def _get():
+            raw = await redis.get(cache_key)
+            if raw:
+                result = json.loads(raw)
+                result["_cached"] = True
+                return result
+            return None
+
         try:
             loop = asyncio.get_running_loop()
             import concurrent.futures
-            future = asyncio.run_coroutine_threadsafe(redis.get(cache_key), loop)
-            cached = future.result(timeout=2)
+            future = asyncio.run_coroutine_threadsafe(_get(), loop)
+            return future.result(timeout=2)
         except RuntimeError:
-            cached = asyncio.run(redis.get(cache_key))
-        
-        if cached:
-            result = json.loads(cached)
-            result["_cached"] = True
-            return result
+            return asyncio.run(_get())
     except Exception:
-        pass
-    return None
+        return None
 
 
 def _cache_set(cache_key: str, data: dict):
-    """Store a result in Redis cache."""
+    """Store a result in Redis cache (sync-safe)."""
     try:
         redis = get_redis_client()
         if not redis:
             return
         import asyncio
+
+        async def _set():
+            await redis.set(cache_key, json.dumps(data, default=str), ex=HOTEL_CACHE_TTL)
+
         try:
             loop = asyncio.get_running_loop()
-            asyncio.run_coroutine_threadsafe(
-                redis.set(cache_key, json.dumps(data, default=str), ex=HOTEL_CACHE_TTL),
-                loop
-            )
+            asyncio.run_coroutine_threadsafe(_set(), loop)
         except RuntimeError:
-            asyncio.run(redis.set(cache_key, json.dumps(data, default=str), ex=HOTEL_CACHE_TTL))
+            asyncio.run(_set())
         except Exception:
             pass
     except Exception:
@@ -86,7 +91,7 @@ def search_hotels(
 ) -> dict:
     """
     Search for hotels using the Amadeus Hotel List + Hotel Offers APIs.
-    Results are cached in Redis for 30 minutes.
+    Results are cached in Redis for 30 minutes. Prices in INR.
     
     Two-step process:
       1. Hotel List API – find hotels by city code
@@ -101,7 +106,7 @@ def search_hotels(
         radius_unit: "KM" or "MI"
     
     Returns:
-        dict with hotel offers or error information
+        dict with hotel offers (prices in INR) or error information
     """
     # ── Check cache ──
     cache_key = _build_cache_key(city_code, checkin, checkout, guests, radius, radius_unit)
@@ -135,6 +140,7 @@ def search_hotels(
         params = {
             "hotelIds": hotel_ids,
             "adults": guests,
+            "currency": "INR",
         }
         if checkin:
             params["checkInDate"] = checkin
@@ -153,13 +159,26 @@ def search_hotels(
             for offer in offers[:3]:  # max 3 offers per hotel
                 price = offer.get("price", {})
                 room = offer.get("room", {})
+                
+                try:
+                    price_total = float(price.get("total", 0))
+                except (ValueError, TypeError):
+                    price_total = 0
+                
+                try:
+                    price_base = float(price.get("base", 0))
+                except (ValueError, TypeError):
+                    price_base = 0
+                
                 parsed_offers.append({
                     "offer_id": offer.get("id", ""),
-                    "check_in": offer.get("checkInDate", ""),
-                    "check_out": offer.get("checkOutDate", ""),
+                    "check_in": offer.get("checkInDate", checkin or ""),
+                    "check_out": offer.get("checkOutDate", checkout or ""),
                     "price_total": price.get("total", ""),
-                    "price_currency": price.get("currency", "USD"),
+                    "price_inr": price_total,
+                    "price_currency": price.get("currency", "INR"),
                     "price_per_night": price.get("base", ""),
+                    "price_per_night_inr": price_base,
                     "room_type": room.get("typeEstimated", {}).get("category", ""),
                     "bed_type": room.get("typeEstimated", {}).get("bedType", ""),
                     "description": room.get("description", {}).get("text", ""),
@@ -172,6 +191,13 @@ def search_hotels(
                 "latitude": hotel_info.get("latitude"),
                 "longitude": hotel_info.get("longitude"),
                 "offers": parsed_offers,
+                # Convenience fields: use best (first) offer
+                "best_price_inr": parsed_offers[0]["price_inr"] if parsed_offers else 0,
+                "best_price_per_night_inr": parsed_offers[0]["price_per_night_inr"] if parsed_offers else 0,
+                "room_type": parsed_offers[0]["room_type"] if parsed_offers else "",
+                "bed_type": parsed_offers[0]["bed_type"] if parsed_offers else "",
+                "check_in": checkin or "",
+                "check_out": checkout or "",
             })
         
         result = {
@@ -179,6 +205,7 @@ def search_hotels(
             "checkin": checkin,
             "checkout": checkout,
             "guests": guests,
+            "currency": "INR",
             "hotels": hotels,
             "total_results": len(hotels),
         }
@@ -193,9 +220,11 @@ def search_hotels(
             "city_code": city_code,
             "error": f"Amadeus API error: {str(e)}",
             "status_code": getattr(e.response, "status_code", None),
+            "hotels": [],
         }
     except Exception as e:
         return {
             "city_code": city_code,
             "error": f"Hotel search failed: {str(e)}",
+            "hotels": [],
         }
