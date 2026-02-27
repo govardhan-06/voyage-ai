@@ -53,10 +53,12 @@ export interface AuthResponse {
 
 export interface TripConstraints {
   destination: string;
+  origin?: string;
   start_date: string;
   end_date: string;
   duration_days: number;
   budget: number;
+  budget_currency?: string;
   travel_group: string;
   traveler_count: number;
   special_constraints: string[];
@@ -67,9 +69,12 @@ export interface Trip {
   user_id: string;
   title: string;
   status: string;
+  currency?: string;
   created_at: string;
   updated_at: string;
   trip_constraints: TripConstraints;
+  selected_flight?: FlightOption | null;
+  selected_hotel?: HotelOption | null;
   current_version: number;
   final_itinerary_version: number | null;
 }
@@ -97,6 +102,7 @@ export interface Activity {
 export interface ItineraryDay {
   day_number: number;
   date: string;
+  theme?: string;
   activities: Activity[];
 }
 
@@ -106,6 +112,9 @@ export interface Itinerary {
   total_cost_estimate: number;
   currency: string;
   days: ItineraryDay[];
+  assumptions?: string[];
+  selected_flight?: FlightOption | null;
+  selected_hotel?: HotelOption | null;
 }
 
 export interface ItineraryVersion {
@@ -118,9 +127,47 @@ export interface ItineraryVersion {
   itinerary: Itinerary;
 }
 
+// ==================== Flight & Hotel Selection ====================
+
+export interface FlightOption {
+  index?: number;
+  flight_id?: string;
+  airline: string;
+  flight_number: string;
+  departure_time: string;
+  arrival_time: string;
+  duration: string;
+  stops: number;
+  price_inr: number;
+  booking_class?: string;
+  seats_remaining?: string;
+  assumption?: boolean;
+  note?: string;
+}
+
+export interface HotelOption {
+  index?: number;
+  hotel_id?: string;
+  name: string;
+  city?: string;
+  city_code?: string;
+  price_inr?: number;
+  best_price_inr?: number;
+  price_per_night_inr?: number;
+  best_price_per_night_inr?: number;
+  room_type?: string;
+  bed_type?: string;
+  check_in?: string;
+  check_out?: string;
+  latitude?: number;
+  longitude?: number;
+  assumption?: boolean;
+  note?: string;
+}
+
 // ==================== Chat ====================
 
-export type ChatStatus = 'clarifying' | 'planning' | 'reviewing' | 'complete';
+export type ChatStatus = 'clarifying' | 'planning' | 'selecting_flight' | 'selecting_hotel' | 'reviewing' | 'complete';
 
 export interface SlotsCollected {
   destination?: string;
@@ -152,6 +199,10 @@ export interface ChatResponseData {
     recommended_hotels: unknown[];
     daily_themes: string[];
   };
+  available_flights?: FlightOption[];
+  available_hotels?: HotelOption[];
+  selected_flight?: FlightOption | null;
+  selected_hotel?: HotelOption | null;
   trip_id?: string;
   itinerary_version_id?: string;
 }
@@ -214,4 +265,37 @@ export interface ItinerariesListParams {
   to_date?: string;
   skip?: number;
   limit?: number;
+}
+
+// ==================== Export ====================
+
+export interface ItineraryExport {
+  export_info: {
+    generated_at: string;
+    trip_id: string;
+    version: number;
+    currency: string;
+  };
+  trip: {
+    title: string;
+    destination: string;
+    origin: string;
+    start_date: string;
+    end_date: string;
+    duration_days: number;
+    travel_group: string;
+    traveler_count: number;
+    budget_inr: number;
+  };
+  selected_flight: FlightOption | null;
+  selected_hotel: HotelOption | null;
+  itinerary: Itinerary;
+  cost_summary: {
+    currency: string;
+    flight_cost_inr: number;
+    hotel_cost_inr: number;
+    activity_cost_inr: number;
+    total_estimate_inr: number;
+    daily_breakdown: { day: number; date: string; cost_inr: number }[];
+  };
 }

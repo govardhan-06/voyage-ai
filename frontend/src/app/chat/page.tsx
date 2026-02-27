@@ -7,10 +7,111 @@ import { tripsAPI } from '@/lib/api';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Send, Sparkles, Bot, User, Loader2, Check, X, Edit3,
-    MapPin, Clock, DollarSign, Calendar, ArrowRight, Plane
+    MapPin, Clock, IndianRupee, Calendar, ArrowRight, Plane,
+    Hotel, ChevronRight
 } from 'lucide-react';
-import type { ChatMessage, ChatResponse, Itinerary, ItineraryVersion } from '@/types';
+import type { ChatMessage, ChatResponse, Itinerary, ItineraryVersion, FlightOption, HotelOption } from '@/types';
 import styles from './page.module.css';
+
+// ── Helpers ──
+function formatINR(amount: number): string {
+    if (!amount || amount === 0) return '₹0';
+    return `₹${amount.toLocaleString('en-IN')}`;
+}
+
+// ── Flight Selection Card ──
+function FlightCard({
+    flight,
+    onSelect,
+}: {
+    flight: FlightOption & { index: number };
+    onSelect: (idx: number) => void;
+}) {
+    const depTime = flight.departure_time
+        ? new Date(flight.departure_time).toLocaleString('en-IN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : 'TBD';
+    const arrTime = flight.arrival_time
+        ? new Date(flight.arrival_time).toLocaleString('en-IN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : 'TBD';
+    const stopsText = flight.stops === 0 ? 'Non-stop' : `${flight.stops} stop(s)`;
+
+    return (
+        <motion.button
+            className={styles.selectionCard}
+            onClick={() => onSelect(flight.index)}
+            whileHover={{ scale: 1.02, y: -2 }}
+            whileTap={{ scale: 0.98 }}
+        >
+            <div className={styles.selectionCardNumber}>{flight.index}</div>
+            <div className={styles.selectionCardBody}>
+                <div className={styles.selectionCardTitle}>
+                    <Plane size={14} />
+                    <span>{flight.airline} {flight.flight_number}</span>
+                    <span className={styles.selectionBadge}>{flight.booking_class || 'ECONOMY'}</span>
+                    {stopsText !== 'Non-stop' && <span className={styles.stopsBadge}>{stopsText}</span>}
+                </div>
+                <div className={styles.flightTimes}>
+                    <span>{depTime}</span>
+                    <div className={styles.flightArrow}>
+                        <div className={styles.flightLine} />
+                        <ChevronRight size={12} />
+                    </div>
+                    <span>{arrTime}</span>
+                    {flight.duration && <span className={styles.flightDuration}>{flight.duration}</span>}
+                </div>
+            </div>
+            <div className={styles.selectionCardPrice}>
+                {flight.price_inr > 0 ? formatINR(flight.price_inr) : 'Quote on request'}
+            </div>
+        </motion.button>
+    );
+}
+
+// ── Hotel Selection Card ──
+function HotelCard({
+    hotel,
+    onSelect,
+}: {
+    hotel: HotelOption & { index: number };
+    onSelect: (idx: number) => void;
+}) {
+    const price = hotel.price_inr || hotel.best_price_inr || 0;
+    const perNight = hotel.price_per_night_inr || hotel.best_price_per_night_inr || 0;
+
+    return (
+        <motion.button
+            className={styles.selectionCard}
+            onClick={() => onSelect(hotel.index!)}
+            whileHover={{ scale: 1.02, y: -2 }}
+            whileTap={{ scale: 0.98 }}
+        >
+            <div className={styles.selectionCardNumber}>{hotel.index}</div>
+            <div className={styles.selectionCardBody}>
+                <div className={styles.selectionCardTitle}>
+                    <Hotel size={14} />
+                    <span>{hotel.name}</span>
+                </div>
+                <div className={styles.hotelMeta}>
+                    {hotel.room_type && <span className={styles.selectionBadge}>{hotel.room_type}</span>}
+                    {hotel.bed_type && <span className={styles.selectionBadge}>{hotel.bed_type}</span>}
+                    {hotel.check_in && hotel.check_out && (
+                        <span className={styles.hotelDates}>
+                            {hotel.check_in} → {hotel.check_out}
+                        </span>
+                    )}
+                </div>
+            </div>
+            <div className={styles.selectionCardPrice}>
+                {price > 0 ? (
+                    <>
+                        <span>{formatINR(price)}</span>
+                        {perNight > 0 && <span className={styles.perNight}>{formatINR(perNight)}/night</span>}
+                    </>
+                ) : 'Price on request'}
+            </div>
+        </motion.button>
+    );
+}
 
 export default function ChatPage() {
     const { userId } = useAuthStore();
@@ -23,6 +124,8 @@ export default function ChatPage() {
     const [sending, setSending] = useState(false);
     const [currentStatus, setCurrentStatus] = useState<string | null>(null);
     const [reviewItinerary, setReviewItinerary] = useState<Itinerary | null>(null);
+    const [availableFlights, setAvailableFlights] = useState<FlightOption[]>([]);
+    const [availableHotels, setAvailableHotels] = useState<HotelOption[]>([]);
     const [completedTripId, setCompletedTripId] = useState<string | null>(null);
     const [finalItinerary, setFinalItinerary] = useState<ItineraryVersion | null>(null);
 
@@ -43,7 +146,7 @@ export default function ChatPage() {
 
     useEffect(() => {
         scrollToBottom();
-    }, [messages, reviewItinerary, finalItinerary, scrollToBottom]);
+    }, [messages, reviewItinerary, finalItinerary, availableFlights, availableHotels, scrollToBottom]);
 
     // Auto-fetch itinerary on completion
     const fetchFinalItinerary = useCallback(async (tripId: string) => {
@@ -69,6 +172,8 @@ export default function ChatPage() {
         setInput('');
         setSending(true);
         setReviewItinerary(null);
+        setAvailableFlights([]);
+        setAvailableHotels([]);
 
         try {
             const response: ChatResponse = await tripsAPI.chat({
@@ -91,13 +196,17 @@ export default function ChatPage() {
             setMessages((prev) => [...prev, aiMessage]);
 
             // Handle statuses
+            if (response.status === 'selecting_flight' && response.data?.available_flights) {
+                setAvailableFlights(response.data.available_flights);
+            }
+            if (response.status === 'selecting_hotel' && response.data?.available_hotels) {
+                setAvailableHotels(response.data.available_hotels);
+            }
             if (response.status === 'reviewing' && response.data?.itinerary) {
                 setReviewItinerary(response.data.itinerary);
             }
-
             if (response.status === 'complete' && response.data?.trip_id) {
                 setCompletedTripId(response.data.trip_id);
-                // Auto-fetch the finalized itinerary
                 fetchFinalItinerary(response.data.trip_id);
             }
         } catch {
@@ -118,12 +227,30 @@ export default function ChatPage() {
         sendMessage();
     };
 
-    const handleApprove = () => {
-        sendMessage('approve');
+    const handleApprove = () => sendMessage('approve');
+
+    const handleRevise = (feedback: string) => sendMessage(feedback);
+
+    const handleFlightSelect = (idx: number) => {
+        setAvailableFlights([]);
+        sendMessage(String(idx));
     };
 
-    const handleRevise = (feedback: string) => {
-        sendMessage(feedback);
+    const handleHotelSelect = (idx: number) => {
+        setAvailableHotels([]);
+        sendMessage(String(idx));
+    };
+
+    const getStatusLabel = () => {
+        if (sending) return <><Loader2 size={12} className={styles.spinIcon} /> Planning...</>;
+        switch (currentStatus) {
+            case 'clarifying': return <><span className={styles.statusDot} /> Gathering details</>;
+            case 'selecting_flight': return <><span className={styles.statusDot} /> Choose your flight</>;
+            case 'selecting_hotel': return <><span className={styles.statusDot} /> Choose your hotel</>;
+            case 'reviewing': return <><span className={styles.statusDot} /> Awaiting review</>;
+            case 'complete': return <><span className={styles.statusDot} /> Trip finalized</>;
+            default: return <><span className={styles.statusDot} /> Ready to help</>;
+        }
     };
 
     return (
@@ -136,15 +263,7 @@ export default function ChatPage() {
                     </div>
                     <div>
                         <h2 className={styles.headerTitle}>AI Travel Agent</h2>
-                        <div className={styles.headerStatus}>
-                            {sending ? (
-                                <><Loader2 size={12} className={styles.spinIcon} /> Planning...</>
-                            ) : currentStatus ? (
-                                <><span className={styles.statusDot} /> {currentStatus === 'clarifying' ? 'Gathering details' : currentStatus === 'reviewing' ? 'Awaiting review' : currentStatus === 'complete' ? 'Trip finalized' : 'Processing'}</>
-                            ) : (
-                                <><span className={styles.statusDot} /> Ready to help</>
-                            )}
-                        </div>
+                        <div className={styles.headerStatus}>{getStatusLabel()}</div>
                     </div>
                 </div>
                 {completedTripId && (
@@ -157,7 +276,7 @@ export default function ChatPage() {
                 )}
             </div>
 
-            {/* Messages Area — single column */}
+            {/* Messages Area */}
             <div className={styles.messagesArea}>
                 {messages.length === 0 && (
                     <div className={styles.welcomeMessage}>
@@ -170,12 +289,12 @@ export default function ChatPage() {
                                 <Plane size={32} />
                             </div>
                             <h3>Where would you like to go?</h3>
-                            <p>Tell me about your dream trip and I&apos;ll create a personalized itinerary for you.</p>
+                            <p>Tell me about your dream trip and I&apos;ll create a personalized itinerary — with real flight & hotel options in ₹ INR.</p>
                             <div className={styles.quickPrompts}>
                                 {[
-                                    'Plan a 5-day trip to Tokyo, Japan',
-                                    'Weekend getaway in Paris',
-                                    'Adventure trip to Bali for a week',
+                                    'Plan a 5-day trip to Tokyo from Mumbai',
+                                    'Weekend getaway in Goa for 2',
+                                    'Family trip to Bali for a week from Delhi',
                                 ].map((prompt, i) => (
                                     <button
                                         key={i}
@@ -225,10 +344,12 @@ export default function ChatPage() {
                                     {/* Status badge */}
                                     {msg.status && (
                                         <div className={`${styles.statusBadge} ${styles[`status_${msg.status}`]}`}>
-                                            {msg.status === 'reviewing' ? '📋 Review Itinerary Below' :
-                                                msg.status === 'complete' ? '✅ Trip Finalized!' :
-                                                    msg.status === 'clarifying' ? '💭 More details needed' :
-                                                        '⏳ Processing'}
+                                            {msg.status === 'selecting_flight' ? '✈️ Select Your Flight' :
+                                                msg.status === 'selecting_hotel' ? '🏨 Select Your Hotel' :
+                                                    msg.status === 'reviewing' ? '📋 Review Itinerary Below' :
+                                                        msg.status === 'complete' ? '✅ Trip Finalized!' :
+                                                            msg.status === 'clarifying' ? '💭 More details needed' :
+                                                                '⏳ Processing'}
                                         </div>
                                     )}
 
@@ -254,7 +375,67 @@ export default function ChatPage() {
                         </motion.div>
                     )}
 
-                    {/* Inline Itinerary Preview (while reviewing) */}
+                    {/* ── Flight Selection UI ── */}
+                    <AnimatePresence>
+                        {availableFlights.length > 0 && (
+                            <motion.div
+                                className={styles.selectionPanel}
+                                initial={{ opacity: 0, y: 20 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: 20 }}
+                            >
+                                <div className={styles.selectionPanelHeader}>
+                                    <Plane size={18} />
+                                    <h3>Select Your Flight</h3>
+                                    <span className={styles.currencyBadge}>Prices in ₹ INR</span>
+                                </div>
+                                <div className={styles.selectionCards}>
+                                    {availableFlights.map((flight, i) => (
+                                        <FlightCard
+                                            key={i}
+                                            flight={{ ...flight, index: i + 1 }}
+                                            onSelect={handleFlightSelect}
+                                        />
+                                    ))}
+                                </div>
+                                <p className={styles.selectionHint}>
+                                    💡 Economy class assumed. Mention &quot;business class&quot; if needed.
+                                </p>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+
+                    {/* ── Hotel Selection UI ── */}
+                    <AnimatePresence>
+                        {availableHotels.length > 0 && (
+                            <motion.div
+                                className={styles.selectionPanel}
+                                initial={{ opacity: 0, y: 20 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: 20 }}
+                            >
+                                <div className={styles.selectionPanelHeader}>
+                                    <Hotel size={18} />
+                                    <h3>Select Your Hotel</h3>
+                                    <span className={styles.currencyBadge}>Prices in ₹ INR</span>
+                                </div>
+                                <div className={styles.selectionCards}>
+                                    {availableHotels.map((hotel, i) => (
+                                        <HotelCard
+                                            key={i}
+                                            hotel={{ ...hotel, index: i + 1 }}
+                                            onSelect={handleHotelSelect}
+                                        />
+                                    ))}
+                                </div>
+                                <p className={styles.selectionHint}>
+                                    💡 3-star hotel assumed. Mention &quot;luxury&quot; or &quot;budget&quot; if needed.
+                                </p>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+
+                    {/* ── Itinerary Review (while reviewing) ── */}
                     <AnimatePresence>
                         {reviewItinerary && (
                             <motion.div
@@ -266,10 +447,34 @@ export default function ChatPage() {
                                 <div className={styles.itineraryInlineHeader}>
                                     <h3>📋 Draft Itinerary</h3>
                                     <div className={styles.itineraryCost}>
-                                        <DollarSign size={16} />
-                                        {reviewItinerary.total_cost_estimate} {reviewItinerary.currency}
+                                        <IndianRupee size={15} />
+                                        {reviewItinerary.total_cost_estimate?.toLocaleString('en-IN')} {reviewItinerary.currency}
                                     </div>
                                 </div>
+
+                                {/* Selected Flight & Hotel summary */}
+                                {(reviewItinerary.selected_flight || reviewItinerary.selected_hotel) && (
+                                    <div className={styles.selectionSummary}>
+                                        {reviewItinerary.selected_flight && !reviewItinerary.selected_flight.assumption && (
+                                            <div className={styles.selectionSummaryItem}>
+                                                <Plane size={13} />
+                                                <span>
+                                                    {reviewItinerary.selected_flight.airline} {reviewItinerary.selected_flight.flight_number} —{' '}
+                                                    {formatINR(reviewItinerary.selected_flight.price_inr)}
+                                                </span>
+                                            </div>
+                                        )}
+                                        {reviewItinerary.selected_hotel && !reviewItinerary.selected_hotel.assumption && (
+                                            <div className={styles.selectionSummaryItem}>
+                                                <Hotel size={13} />
+                                                <span>
+                                                    {reviewItinerary.selected_hotel.name} —{' '}
+                                                    {formatINR(reviewItinerary.selected_hotel.price_inr || reviewItinerary.selected_hotel.best_price_inr || 0)} total
+                                                </span>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
 
                                 {reviewItinerary.summary && (
                                     <p className={styles.itinerarySummary}>{reviewItinerary.summary}</p>
@@ -282,6 +487,7 @@ export default function ChatPage() {
                                                 <Calendar size={14} />
                                                 <span>Day {day.day_number}</span>
                                                 {day.date && <span className={styles.dayDate}>{day.date}</span>}
+                                                {day.theme && <span className={styles.dayTheme}>{day.theme}</span>}
                                             </div>
                                             <div className={styles.activities}>
                                                 {day.activities.map((act, j) => (
@@ -296,7 +502,7 @@ export default function ChatPage() {
                                                             </div>
                                                             {act.cost_estimate > 0 && (
                                                                 <div className={styles.activityCost}>
-                                                                    ${act.cost_estimate}
+                                                                    ₹{act.cost_estimate.toLocaleString('en-IN')}
                                                                 </div>
                                                             )}
                                                         </div>
@@ -331,7 +537,7 @@ export default function ChatPage() {
                         )}
                     </AnimatePresence>
 
-                    {/* Inline Final Itinerary (after completion) */}
+                    {/* ── Final Itinerary (after completion) ── */}
                     <AnimatePresence>
                         {finalItinerary && (
                             <motion.div
@@ -343,13 +549,33 @@ export default function ChatPage() {
                                 <div className={styles.itineraryInlineHeader}>
                                     <h3>✅ Final Itinerary</h3>
                                     <div className={styles.itineraryCost}>
-                                        <DollarSign size={16} />
-                                        {finalItinerary.itinerary.total_cost_estimate} {finalItinerary.itinerary.currency}
+                                        <IndianRupee size={15} />
+                                        {finalItinerary.itinerary.total_cost_estimate?.toLocaleString('en-IN')} {finalItinerary.itinerary.currency}
                                     </div>
                                 </div>
 
-                                {finalItinerary.change_summary && (
-                                    <p className={styles.itinerarySummary}>{finalItinerary.change_summary}</p>
+                                {/* Selected Flight & Hotel summary */}
+                                {(finalItinerary.itinerary.selected_flight || finalItinerary.itinerary.selected_hotel) && (
+                                    <div className={styles.selectionSummary}>
+                                        {finalItinerary.itinerary.selected_flight && !finalItinerary.itinerary.selected_flight.assumption && (
+                                            <div className={styles.selectionSummaryItem}>
+                                                <Plane size={13} />
+                                                <span>
+                                                    {finalItinerary.itinerary.selected_flight.airline} {finalItinerary.itinerary.selected_flight.flight_number} —{' '}
+                                                    {formatINR(finalItinerary.itinerary.selected_flight.price_inr)}
+                                                </span>
+                                            </div>
+                                        )}
+                                        {finalItinerary.itinerary.selected_hotel && !finalItinerary.itinerary.selected_hotel.assumption && (
+                                            <div className={styles.selectionSummaryItem}>
+                                                <Hotel size={13} />
+                                                <span>
+                                                    {finalItinerary.itinerary.selected_hotel.name} —{' '}
+                                                    {formatINR(finalItinerary.itinerary.selected_hotel.price_inr || finalItinerary.itinerary.selected_hotel.best_price_inr || 0)} total
+                                                </span>
+                                            </div>
+                                        )}
+                                    </div>
                                 )}
 
                                 <div className={styles.itineraryDays}>
@@ -373,7 +599,7 @@ export default function ChatPage() {
                                                             </div>
                                                             {act.cost_estimate > 0 && (
                                                                 <div className={styles.activityCost}>
-                                                                    ${act.cost_estimate}
+                                                                    ₹{act.cost_estimate.toLocaleString('en-IN')}
                                                                 </div>
                                                             )}
                                                         </div>
@@ -412,9 +638,13 @@ export default function ChatPage() {
                         placeholder={
                             currentStatus === 'complete'
                                 ? 'Trip complete! View your itinerary above.'
-                                : currentStatus === 'reviewing'
-                                    ? 'Describe any changes, or approve the itinerary...'
-                                    : 'Tell me about your dream trip...'
+                                : currentStatus === 'selecting_flight'
+                                    ? 'Type a number (1, 2, ...) to select a flight...'
+                                    : currentStatus === 'selecting_hotel'
+                                        ? 'Type a number (1, 2, ...) to select a hotel...'
+                                        : currentStatus === 'reviewing'
+                                            ? 'Describe any changes, or type "approve"...'
+                                            : 'Tell me about your dream trip...'
                         }
                         value={input}
                         onChange={(e) => setInput(e.target.value)}

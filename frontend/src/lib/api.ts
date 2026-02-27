@@ -14,6 +14,7 @@ import type {
     TripsListParams,
     ItinerariesListResponse,
     ItinerariesListParams,
+    ItineraryExport,
 } from '@/types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -113,6 +114,17 @@ export const tripsAPI = {
     getConversations: async (tripId: string): Promise<ConversationHistory> => {
         const res = await api.get(`/trips/${tripId}/conversations`);
         return res.data;
+    },
+
+    exportItinerary: async (tripId: string, format: 'json' | 'text' = 'json'): Promise<ItineraryExport | { text: string }> => {
+        const res = await api.get(`/trips/${tripId}/export`, { params: { format } });
+        return res.data;
+    },
+
+    downloadItinerary: (tripId: string, format: 'json' | 'text' = 'json'): void => {
+        const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+        const headers = token ? `?format=${format}` : `?format=${format}`;
+        window.open(`${API_BASE_URL}/trips/${tripId}/export${headers}`, '_blank');
     },
 };
 
