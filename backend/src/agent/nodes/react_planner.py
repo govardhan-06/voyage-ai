@@ -56,7 +56,6 @@ def _get_llm():
         model=settings.LLM_MODEL,
         google_api_key=settings.GOOGLE_API_KEY,
         temperature=0.2,
-        thinking_level="minimal",
     )
 
 
