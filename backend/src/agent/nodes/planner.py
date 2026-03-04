@@ -89,27 +89,75 @@ def _get_llm():
         model=settings.LLM_MODEL,
         google_api_key=settings.GOOGLE_API_KEY,
         temperature=0.2,
+        thinking_level="minimal",
     )
 
 
-def _execute_tools(tool_requests: list) -> dict:
-    """Deterministic tool execution — only whitelisted tools allowed."""
+def _extract_text(content) -> str:
+    """Safely extract plain text from a Gemini response.
+
+    Some Gemini model variants return response.content as a list of
+    content-part dicts instead of a plain str. This normalises both shapes.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict):
+                parts.append(part.get("text", ""))
+            elif isinstance(part, str):
+                parts.append(part)
+        return "".join(parts)
+    return str(content)
+
+
+def _normalize_tool_params(tool_name: str, params: dict, trip_request: dict) -> dict:
+    """Map any LLM-supplied param name variants to the actual tool signatures.
+
+    Gemini may use slightly different key names than what the tools expect.
+    This ensures the call never fails with a TypeError due to unexpected kwargs.
+    """
+    tr = trip_request or {}
+    if tool_name == "search_flights":
+        return {
+            "origin": params.get("origin") or params.get("origin_iata") or tr.get("origin_iata") or tr.get("origin", "DEL"),
+            "destination": params.get("destination") or params.get("destination_iata") or tr.get("destination_iata") or tr.get("destination", "BOM"),
+            "departure_date": params.get("departure_date") or params.get("start_date") or tr.get("start_date", ""),
+            "return_date": params.get("return_date") or params.get("end_date") or tr.get("end_date"),
+            "travelers": params.get("travelers") or params.get("traveler_count") or tr.get("traveler_count", 1),
+        }
+    if tool_name == "search_hotels":
+        return {
+            "city_code": params.get("city_code") or params.get("destination_iata") or params.get("city") or tr.get("destination_iata") or tr.get("destination", "DEL"),
+            "checkin": params.get("checkin") or params.get("check_in") or params.get("start_date") or tr.get("start_date", ""),
+            "checkout": params.get("checkout") or params.get("check_out") or params.get("end_date") or tr.get("end_date", ""),
+            "guests": params.get("guests") or params.get("traveler_count") or tr.get("traveler_count", 1),
+            "radius": params.get("radius", 30),
+            "radius_unit": params.get("radius_unit", "KM"),
+        }
+    return params
+
+
+def _execute_tools(tool_requests: list, trip_request: dict = None) -> dict:
+    """Deterministic tool execution — only whitelisted tools allowed. Params normalised from trip_request."""
     results = {}
     for req in tool_requests:
         tool_name = req.get("tool_name", "")
-        params = req.get("parameters", {})
-        
+        raw_params = req.get("parameters", {})
+        params = _normalize_tool_params(tool_name, raw_params, trip_request or {})
+
         if tool_name not in TOOL_REGISTRY:
             results[tool_name] = {"error": f"Unknown tool: {tool_name}"}
             continue
-        
+
         try:
             tool_fn = TOOL_REGISTRY[tool_name]
             result = tool_fn(**params)
             results[tool_name] = result
         except Exception as e:
             results[tool_name] = {"error": str(e)}
-    
+
     return results
 
 

@@ -55,7 +55,28 @@ def _get_llm():
         model=settings.LLM_MODEL,
         google_api_key=settings.GOOGLE_API_KEY,
         temperature=0.1,
+        thinking_level="minimal",
     )
+
+
+def _extract_text(content) -> str:
+    """Safely extract plain text from a Gemini response.
+
+    Gemini model variants (especially preview / aliased names) may return
+    response.content as a list of content-part dicts instead of a plain str.
+    This helper normalises both shapes.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict):
+                parts.append(part.get("text", ""))
+            elif isinstance(part, str):
+                parts.append(part)
+        return "".join(parts)
+    return str(content)
 
 
 def _merge_with_preferences(slots: dict, preferences: dict) -> dict:
@@ -65,10 +86,10 @@ def _merge_with_preferences(slots: dict, preferences: dict) -> dict:
         if isinstance(budget, dict):
             slots["budget_min"] = slots.get("budget_min") or budget.get("min")
             slots["budget_max"] = slots.get("budget_max") or budget.get("max")
-    
+
     if not slots.get("interests") and preferences.get("interests"):
         slots["interests"] = preferences["interests"]
-    
+
     if not slots.get("travel_group") and preferences.get("travel_style"):
         styles = preferences["travel_style"]
         if isinstance(styles, list) and styles:
@@ -79,7 +100,7 @@ def _merge_with_preferences(slots: dict, preferences: dict) -> dict:
                 slots["travel_group"] = "couple"
             elif "family" in style:
                 slots["travel_group"] = "family"
-    
+
     return slots
 
 
@@ -101,20 +122,20 @@ def _check_completeness(slots: dict) -> bool:
     for field in required:
         if not slots.get(field):
             return False
-    
+
     if not slots.get("budget_max"):
         return False
-    
+
     if not slots.get("travel_group"):
         slots["travel_group"] = "solo"
-    
+
     if not slots.get("traveler_count"):
         group_defaults = {"solo": 1, "couple": 2, "family": 4, "friends": 4}
         slots["traveler_count"] = group_defaults.get(slots["travel_group"], 2)
-    
+
     # Auto-compute end_date
     _compute_end_date(slots)
-    
+
     return True
 
 
@@ -122,7 +143,7 @@ async def intent_slot_node(state: dict) -> dict:
     """
     Extract trip requirements from user message.
     Uses LLM with structured output.
-    
+
     When slots are incomplete, sets slots_complete=False so the graph
     pauses at the interrupt_before point on the next cycle.
     """
@@ -130,7 +151,7 @@ async def intent_slot_node(state: dict) -> dict:
     user_preferences = state.get("user_preferences", {})
     clarification_count = state.get("clarification_count", 0)
     existing_slots = state.get("trip_request", {})
-    
+
     # Get the latest user message
     user_message = ""
     for msg in reversed(messages):
@@ -140,27 +161,30 @@ async def intent_slot_node(state: dict) -> dict:
         elif isinstance(msg, HumanMessage):
             user_message = msg.content
             break
-    
+
     if not user_message:
         return {
             "current_node": "intent_slot",
             "slots_complete": False,
             "messages": [{"role": "ai", "content": "Hi! I'd love to help you plan a trip. Where would you like to go?"}]
         }
-    
+
     llm = _get_llm()
-    
+
     schema_str = json.dumps(SlotFillingResponse.model_json_schema(), indent=2)
     system_prompt = SLOT_FILLING_SYSTEM_PROMPT.format(
         user_preferences=json.dumps(user_preferences, indent=2, default=str),
         schema=schema_str
     )
-    
+
     # Include existing slots context if we're in a clarification loop
     context = ""
     if existing_slots:
-        context = f"\n\nSlots already collected:\n{json.dumps(existing_slots, indent=2, default=str)}\n\nPlease update/merge with any new information from the user's latest message."
-    
+        context = (
+            f"\n\nSlots already collected:\n{json.dumps(existing_slots, indent=2, default=str)}"
+            f"\n\nPlease update/merge with any new information from the user's latest message."
+        )
+
     llm_messages = [
         SystemMessage(content=system_prompt + context),
         HumanMessage(content=user_message)
@@ -175,7 +199,7 @@ async def intent_slot_node(state: dict) -> dict:
             response_text = response_text.split("```json")[1].split("```")[0].strip()
         elif "```" in response_text:
             response_text = response_text.split("```")[1].split("```")[0].strip()
-        
+
         parsed = json.loads(response_text)
         slot_response = SlotFillingResponse(**parsed)
     except (json.JSONDecodeError, Exception):
@@ -183,44 +207,43 @@ async def intent_slot_node(state: dict) -> dict:
             follow_up_question="I had trouble understanding that. Could you tell me where you'd like to go and for how long?",
             is_complete=False
         )
-    
+
     # Merge new slots with existing
     new_slots = slot_response.dict(exclude={"follow_up_question", "is_complete"}, exclude_none=True)
     merged_slots = {**existing_slots, **{k: v for k, v in new_slots.items() if v}}
-    
+
     # Try filling from preferences
     merged_slots = _merge_with_preferences(merged_slots, user_preferences)
-    
+
     # Check completeness
     is_complete = _check_completeness(merged_slots)
-    
+
     # If max clarification rounds reached, force complete with defaults
     if clarification_count >= MAX_CLARIFICATION_ROUNDS and not is_complete:
         if not merged_slots.get("destination"):
             merged_slots["destination"] = "Tokyo, Japan"
         if not merged_slots.get("origin"):
-            merged_slots["origin"] = "New York"
+            merged_slots["origin"] = "New Delhi"
         if not merged_slots.get("duration_days"):
             merged_slots["duration_days"] = 5
         if not merged_slots.get("start_date"):
-            # Default to 30 days from now
             merged_slots["start_date"] = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
         if not merged_slots.get("budget_max"):
-            merged_slots["budget_max"] = 2000
+            merged_slots["budget_max"] = 100000
         if not merged_slots.get("travel_group"):
             merged_slots["travel_group"] = "solo"
         if not merged_slots.get("traveler_count"):
             merged_slots["traveler_count"] = 1
         _compute_end_date(merged_slots)
         is_complete = True
-    
+
     result = {
         "trip_request": merged_slots,
         "slots_complete": is_complete,
         "clarification_count": clarification_count + 1,
         "current_node": "planner" if is_complete else "intent_slot",
     }
-    
+
     if is_complete:
         result["messages"] = [{
             "role": "ai",
@@ -236,5 +259,5 @@ async def intent_slot_node(state: dict) -> dict:
             "role": "ai",
             "content": follow_up
         }]
-    
+
     return result

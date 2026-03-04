@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { tripsAPI } from '@/lib/api';
 import { motion } from 'framer-motion';
 import {
-    MapPin, Clock, DollarSign, Calendar, Tag, ArrowLeft,
+    MapPin, Clock, IndianRupee, Calendar, Tag, ArrowLeft,
     Edit3, Check, X, ExternalLink, Loader2
 } from 'lucide-react';
 import { ItinerarySkeleton } from '@/components/LoadingSkeleton';
@@ -121,8 +121,8 @@ export default function ItineraryPage() {
                             </>
                         )}
                         <span className={styles.metaItem}>
-                            <DollarSign size={16} />
-                            {itinerary.total_cost_estimate || totalCost} {itinerary.currency || 'USD'}
+                            <IndianRupee size={16} />
+                            ₹{(itinerary.total_cost_estimate || totalCost).toLocaleString('en-IN')} {itinerary.currency || 'INR'}
                         </span>
                     </div>
                 </div>
@@ -219,7 +219,7 @@ export default function ItineraryPage() {
                                                             )}
                                                             {activity.cost_estimate > 0 && (
                                                                 <span className={styles.costChip}>
-                                                                    <DollarSign size={12} /> ${activity.cost_estimate}
+                                                                    <IndianRupee size={12} /> ₹{activity.cost_estimate.toLocaleString('en-IN')}
                                                                 </span>
                                                             )}
                                                             {loc?.name && (
@@ -264,13 +264,13 @@ export default function ItineraryPage() {
                                 return (
                                     <div key={day.day_number} className={styles.costRow}>
                                         <span>Day {day.day_number}</span>
-                                        <span>${dayCost}</span>
+                                        <span>₹{dayCost.toLocaleString('en-IN')}</span>
                                     </div>
                                 );
                             })}
                             <div className={`${styles.costRow} ${styles.costTotal}`}>
                                 <span>Total</span>
-                                <span>${totalCost}</span>
+                                <span>₹{totalCost.toLocaleString('en-IN')}</span>
                             </div>
                         </div>
                     </div>
@@ -288,7 +288,7 @@ export default function ItineraryPage() {
                             </div>
                             <div className={styles.detailRow}>
                                 <span>Budget</span>
-                                <span>${trip.trip_constraints.budget}</span>
+                                <span>₹{trip.trip_constraints.budget?.toLocaleString('en-IN') ?? trip.trip_constraints.budget}</span>
                             </div>
                             <div className={styles.detailRow}>
                                 <span>Travelers</span>

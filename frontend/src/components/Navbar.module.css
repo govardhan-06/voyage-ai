@@ -96,6 +96,16 @@
     color: #fff;
 }
 
+.userName {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .logoutText {
     display: inline;
 }
@@ -134,6 +144,10 @@
 
     .logoutText {
         display: none;
+    }
+
+    .userName {
+        max-width: 80px;
     }
 
     .menuToggle {

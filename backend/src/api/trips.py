@@ -1,12 +1,6 @@
-"""Trip planning API endpoints – Session-based chat with human-in-the-loop.
+"""Trip planning API – Session-based chat with HITL only for itinerary review.
 
-Uses LangGraph's interrupt_before + MemorySaver for four pause points:
-1. After intent_slot (when slots incomplete → graph ends, API detects & prompts user)
-2. Before flight_selection (pause to show flights for selection)
-3. Before hotel_selection (pause to show hotels for selection)
-4. Before review node (interrupt_before → graph pauses with draft itinerary)
-
-All amounts are in INR (Indian Rupees).
+Interrupt before review: user approves or requests changes. Flight/hotel are auto-selected.
 """
 
 import uuid
@@ -140,30 +134,6 @@ def _get_latest_ai_message(state: dict) -> str:
     return "Your trip has been planned!"
 
 
-def _parse_selection_index(message: str) -> Optional[int]:
-    """
-    Try to parse a 1-based selection index from user message.
-    Returns the integer if found, else None.
-    Accepts: "1", "option 2", "number 3", "pick 4", etc.
-    """
-    msg = message.strip()
-    # Try direct integer parse
-    try:
-        idx = int(msg)
-        if 1 <= idx <= 10:
-            return idx
-    except ValueError:
-        pass
-    
-    # Try extracting the first number from the message
-    import re
-    numbers = re.findall(r'\b([1-9])\b', msg)
-    if numbers:
-        return int(numbers[0])
-    
-    return None
-
-
 @router.post("/chat")
 async def chat(
     user_id: str = Body(..., description="User ID"),
@@ -171,24 +141,7 @@ async def chat(
     thread_id: str = Body(None, description="Thread ID for continuing a session (null for new)")
 ):
     """
-    Session-based trip planning chat endpoint.
-    
-    Flow:
-    1. No thread_id → starts a new planning session
-    2. With thread_id → examines current graph state and:
-       a. If clarifying → adds user message to state, re-runs intent_slot
-       b. If selecting_flight → validates selection, resumes graph
-       c. If selecting_hotel → validates selection, resumes graph
-       d. If reviewing → updates review_status/feedback, resumes graph
-       e. If complete → returns final data
-    
-    Response status:
-    - "clarifying"       → agent needs more info, show message + input
-    - "planning"         → planner + tools are running
-    - "selecting_flight" → show flight options, wait for user to pick a number
-    - "selecting_hotel"  → show hotel options, wait for user to pick a number
-    - "reviewing"        → draft itinerary ready for user review
-    - "complete"         → trip finalized, itinerary ready
+    Session-based trip planning chat. HITL only at review (approve/revise itinerary).
     """
     
     # Generate or use provided thread_id
@@ -233,71 +186,7 @@ async def chat(
             current_state = state_snapshot.values
             next_nodes = state_snapshot.next  # tuple of next node names
             
-            if next_nodes and "flight_selection" in next_nodes:
-                # Graph is paused before FLIGHT_SELECTION node
-                available_flights = current_state.get("available_flights", [])
-                selection_idx = _parse_selection_index(message)
-                
-                if selection_idx and available_flights and 1 <= selection_idx <= len(available_flights):
-                    # Valid selection — update state with chosen flight
-                    chosen = available_flights[selection_idx - 1]
-                    await travel_graph.aupdate_state(
-                        config,
-                        {
-                            "selected_flight": chosen,
-                            "messages": [{"role": "user", "content": message}]
-                        }
-                    )
-                else:
-                    # Invalid selection or text input — prompt again
-                    return {
-                        "status": "selecting_flight",
-                        "thread_id": thread_id,
-                        "message": (
-                            f"Please reply with a number between 1 and {len(available_flights)} "
-                            f"to select your flight. For example, reply '1' to choose the first option."
-                        ),
-                        "data": {
-                            "available_flights": available_flights,
-                        }
-                    }
-                
-                # Resume execution
-                result = await travel_graph.ainvoke(None, config=config)
-            
-            elif next_nodes and "hotel_selection" in next_nodes:
-                # Graph is paused before HOTEL_SELECTION node
-                available_hotels = current_state.get("available_hotels", [])
-                selection_idx = _parse_selection_index(message)
-                
-                if selection_idx and available_hotels and 1 <= selection_idx <= len(available_hotels):
-                    # Valid selection — update state with chosen hotel
-                    chosen = available_hotels[selection_idx - 1]
-                    await travel_graph.aupdate_state(
-                        config,
-                        {
-                            "selected_hotel": chosen,
-                            "messages": [{"role": "user", "content": message}]
-                        }
-                    )
-                else:
-                    # Invalid selection — prompt again
-                    return {
-                        "status": "selecting_hotel",
-                        "thread_id": thread_id,
-                        "message": (
-                            f"Please reply with a number between 1 and {len(available_hotels)} "
-                            f"to select your hotel. For example, reply '1' to choose the first option."
-                        ),
-                        "data": {
-                            "available_hotels": available_hotels,
-                        }
-                    }
-                
-                # Resume execution
-                result = await travel_graph.ainvoke(None, config=config)
-            
-            elif next_nodes and "review" in next_nodes:
+            if next_nodes and "review" in next_nodes:
                 # Graph is paused before the REVIEW node
                 response_lower = message.strip().lower()
                 
@@ -325,13 +214,15 @@ async def chat(
             
             else:
                 # Graph ended after intent_slot (clarification needed)
-                # OR graph completed but user is sending a follow-up
+                # OR graph completed but user is sending a follow-up.
+                # Re-enter directly at intent_slot — NOT initializer — to
+                # avoid the initializer wiping already-collected slot data.
                 await travel_graph.aupdate_state(
                     config,
                     {
                         "messages": [{"role": "user", "content": message}],
                     },
-                    as_node="initializer"  # Re-enter from initializer so it flows to intent_slot
+                    as_node="intent_slot"
                 )
                 
                 # Resume graph
@@ -341,33 +232,6 @@ async def chat(
         state_snapshot = await travel_graph.aget_state(config)
         final_state = state_snapshot.values
         next_nodes = state_snapshot.next
-        
-        # Check if graph is paused before flight_selection
-        if next_nodes and "flight_selection" in next_nodes:
-            available_flights = final_state.get("available_flights", [])
-            return {
-                "status": "selecting_flight",
-                "thread_id": thread_id,
-                "message": _get_latest_ai_message(final_state),
-                "data": {
-                    "available_flights": available_flights,
-                    "trip_request": final_state.get("trip_request", {}),
-                }
-            }
-        
-        # Check if graph is paused before hotel_selection
-        if next_nodes and "hotel_selection" in next_nodes:
-            available_hotels = final_state.get("available_hotels", [])
-            return {
-                "status": "selecting_hotel",
-                "thread_id": thread_id,
-                "message": _get_latest_ai_message(final_state),
-                "data": {
-                    "available_hotels": available_hotels,
-                    "selected_flight": final_state.get("selected_flight", {}),
-                    "trip_request": final_state.get("trip_request", {}),
-                }
-            }
         
         # Check if graph is paused before review (draft ready)
         if next_nodes and "review" in next_nodes:

@@ -17,12 +17,19 @@ class Settings(BaseSettings):
 
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
     # LLM_MODEL: str = "gemini-2.5-flash"
-    LLM_MODEL: str = "gemini-3-flash-preview"
+    LLM_MODEL: str = "gemini-2.5-flash-lite"
 
     AMADEUS_API_KEY: str = os.getenv("AMADEUS_API_KEY", "")
     AMADEUS_API_SECRET: str = os.getenv("AMADEUS_API_SECRET", "")
 
+    # LangSmith tracing (set LANGSMITH_TRACING=true to enable)
+    LANGSMITH_TRACING: str = os.getenv("LANGSMITH_TRACING", "false")
+    LANGSMITH_ENDPOINT: str = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
+    LANGSMITH_API_KEY: str = os.getenv("LANGSMITH_API_KEY", "")
+    LANGSMITH_PROJECT: str = os.getenv("LANGSMITH_PROJECT", "Voyage AI")
+
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 settings = Settings()

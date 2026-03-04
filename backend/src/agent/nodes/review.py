@@ -34,11 +34,11 @@ async def review_node(state: dict) -> dict:
             }]
         }
     else:
-        # Revision requested — route back to planner
+        # Revision requested — route back to react_planner
         return {
             "review_status": "revision_requested",
             "review_feedback": review_feedback,
-            "current_node": "planner",
+            "current_node": "react_planner",
             "messages": [{
                 "role": "ai",
                 "content": f"Got it! I'll re-plan based on your feedback and generate an updated itinerary."

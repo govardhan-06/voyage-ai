@@ -64,6 +64,7 @@ export default function Navbar() {
                             <div className={styles.userAvatar}>
                                 {user?.name?.charAt(0).toUpperCase() || 'U'}
                             </div>
+                            <span className={styles.userName}>{user?.name ?? 'Traveler'}</span>
                             <button className="btn btn-ghost btn-sm" onClick={handleLogout}>
                                 <LogOut size={16} />
                                 <span className={styles.logoutText}>Logout</span>

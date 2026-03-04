@@ -8,109 +8,15 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Send, Sparkles, Bot, User, Loader2, Check, X, Edit3,
     MapPin, Clock, IndianRupee, Calendar, ArrowRight, Plane,
-    Hotel, ChevronRight
+    Hotel
 } from 'lucide-react';
-import type { ChatMessage, ChatResponse, Itinerary, ItineraryVersion, FlightOption, HotelOption } from '@/types';
+import type { ChatMessage, ChatResponse, Itinerary, ItineraryVersion } from '@/types';
 import styles from './page.module.css';
 
 // ── Helpers ──
 function formatINR(amount: number): string {
     if (!amount || amount === 0) return '₹0';
     return `₹${amount.toLocaleString('en-IN')}`;
-}
-
-// ── Flight Selection Card ──
-function FlightCard({
-    flight,
-    onSelect,
-}: {
-    flight: FlightOption & { index: number };
-    onSelect: (idx: number) => void;
-}) {
-    const depTime = flight.departure_time
-        ? new Date(flight.departure_time).toLocaleString('en-IN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-        : 'TBD';
-    const arrTime = flight.arrival_time
-        ? new Date(flight.arrival_time).toLocaleString('en-IN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-        : 'TBD';
-    const stopsText = flight.stops === 0 ? 'Non-stop' : `${flight.stops} stop(s)`;
-
-    return (
-        <motion.button
-            className={styles.selectionCard}
-            onClick={() => onSelect(flight.index)}
-            whileHover={{ scale: 1.02, y: -2 }}
-            whileTap={{ scale: 0.98 }}
-        >
-            <div className={styles.selectionCardNumber}>{flight.index}</div>
-            <div className={styles.selectionCardBody}>
-                <div className={styles.selectionCardTitle}>
-                    <Plane size={14} />
-                    <span>{flight.airline} {flight.flight_number}</span>
-                    <span className={styles.selectionBadge}>{flight.booking_class || 'ECONOMY'}</span>
-                    {stopsText !== 'Non-stop' && <span className={styles.stopsBadge}>{stopsText}</span>}
-                </div>
-                <div className={styles.flightTimes}>
-                    <span>{depTime}</span>
-                    <div className={styles.flightArrow}>
-                        <div className={styles.flightLine} />
-                        <ChevronRight size={12} />
-                    </div>
-                    <span>{arrTime}</span>
-                    {flight.duration && <span className={styles.flightDuration}>{flight.duration}</span>}
-                </div>
-            </div>
-            <div className={styles.selectionCardPrice}>
-                {flight.price_inr > 0 ? formatINR(flight.price_inr) : 'Quote on request'}
-            </div>
-        </motion.button>
-    );
-}
-
-// ── Hotel Selection Card ──
-function HotelCard({
-    hotel,
-    onSelect,
-}: {
-    hotel: HotelOption & { index: number };
-    onSelect: (idx: number) => void;
-}) {
-    const price = hotel.price_inr || hotel.best_price_inr || 0;
-    const perNight = hotel.price_per_night_inr || hotel.best_price_per_night_inr || 0;
-
-    return (
-        <motion.button
-            className={styles.selectionCard}
-            onClick={() => onSelect(hotel.index!)}
-            whileHover={{ scale: 1.02, y: -2 }}
-            whileTap={{ scale: 0.98 }}
-        >
-            <div className={styles.selectionCardNumber}>{hotel.index}</div>
-            <div className={styles.selectionCardBody}>
-                <div className={styles.selectionCardTitle}>
-                    <Hotel size={14} />
-                    <span>{hotel.name}</span>
-                </div>
-                <div className={styles.hotelMeta}>
-                    {hotel.room_type && <span className={styles.selectionBadge}>{hotel.room_type}</span>}
-                    {hotel.bed_type && <span className={styles.selectionBadge}>{hotel.bed_type}</span>}
-                    {hotel.check_in && hotel.check_out && (
-                        <span className={styles.hotelDates}>
-                            {hotel.check_in} → {hotel.check_out}
-                        </span>
-                    )}
-                </div>
-            </div>
-            <div className={styles.selectionCardPrice}>
-                {price > 0 ? (
-                    <>
-                        <span>{formatINR(price)}</span>
-                        {perNight > 0 && <span className={styles.perNight}>{formatINR(perNight)}/night</span>}
-                    </>
-                ) : 'Price on request'}
-            </div>
-        </motion.button>
-    );
 }
 
 export default function ChatPage() {
@@ -124,8 +30,6 @@ export default function ChatPage() {
     const [sending, setSending] = useState(false);
     const [currentStatus, setCurrentStatus] = useState<string | null>(null);
     const [reviewItinerary, setReviewItinerary] = useState<Itinerary | null>(null);
-    const [availableFlights, setAvailableFlights] = useState<FlightOption[]>([]);
-    const [availableHotels, setAvailableHotels] = useState<HotelOption[]>([]);
     const [completedTripId, setCompletedTripId] = useState<string | null>(null);
     const [finalItinerary, setFinalItinerary] = useState<ItineraryVersion | null>(null);
 
@@ -146,7 +50,7 @@ export default function ChatPage() {
 
     useEffect(() => {
         scrollToBottom();
-    }, [messages, reviewItinerary, finalItinerary, availableFlights, availableHotels, scrollToBottom]);
+    }, [messages, reviewItinerary, finalItinerary, scrollToBottom]);
 
     // Auto-fetch itinerary on completion
     const fetchFinalItinerary = useCallback(async (tripId: string) => {
@@ -172,8 +76,6 @@ export default function ChatPage() {
         setInput('');
         setSending(true);
         setReviewItinerary(null);
-        setAvailableFlights([]);
-        setAvailableHotels([]);
 
         try {
             const response: ChatResponse = await tripsAPI.chat({
@@ -195,13 +97,6 @@ export default function ChatPage() {
 
             setMessages((prev) => [...prev, aiMessage]);
 
-            // Handle statuses
-            if (response.status === 'selecting_flight' && response.data?.available_flights) {
-                setAvailableFlights(response.data.available_flights);
-            }
-            if (response.status === 'selecting_hotel' && response.data?.available_hotels) {
-                setAvailableHotels(response.data.available_hotels);
-            }
             if (response.status === 'reviewing' && response.data?.itinerary) {
                 setReviewItinerary(response.data.itinerary);
             }
@@ -231,22 +126,10 @@ export default function ChatPage() {
 
     const handleRevise = (feedback: string) => sendMessage(feedback);
 
-    const handleFlightSelect = (idx: number) => {
-        setAvailableFlights([]);
-        sendMessage(String(idx));
-    };
-
-    const handleHotelSelect = (idx: number) => {
-        setAvailableHotels([]);
-        sendMessage(String(idx));
-    };
-
     const getStatusLabel = () => {
         if (sending) return <><Loader2 size={12} className={styles.spinIcon} /> Planning...</>;
         switch (currentStatus) {
             case 'clarifying': return <><span className={styles.statusDot} /> Gathering details</>;
-            case 'selecting_flight': return <><span className={styles.statusDot} /> Choose your flight</>;
-            case 'selecting_hotel': return <><span className={styles.statusDot} /> Choose your hotel</>;
             case 'reviewing': return <><span className={styles.statusDot} /> Awaiting review</>;
             case 'complete': return <><span className={styles.statusDot} /> Trip finalized</>;
             default: return <><span className={styles.statusDot} /> Ready to help</>;
@@ -344,12 +227,10 @@ export default function ChatPage() {
                                     {/* Status badge */}
                                     {msg.status && (
                                         <div className={`${styles.statusBadge} ${styles[`status_${msg.status}`]}`}>
-                                            {msg.status === 'selecting_flight' ? '✈️ Select Your Flight' :
-                                                msg.status === 'selecting_hotel' ? '🏨 Select Your Hotel' :
-                                                    msg.status === 'reviewing' ? '📋 Review Itinerary Below' :
-                                                        msg.status === 'complete' ? '✅ Trip Finalized!' :
-                                                            msg.status === 'clarifying' ? '💭 More details needed' :
-                                                                '⏳ Processing'}
+                                            {msg.status === 'reviewing' ? '📋 Review Itinerary Below' :
+                                                msg.status === 'complete' ? '✅ Trip Finalized!' :
+                                                    msg.status === 'clarifying' ? '💭 More details needed' :
+                                                        '⏳ Processing'}
                                         </div>
                                     )}
 
@@ -374,66 +255,6 @@ export default function ChatPage() {
                             </div>
                         </motion.div>
                     )}
-
-                    {/* ── Flight Selection UI ── */}
-                    <AnimatePresence>
-                        {availableFlights.length > 0 && (
-                            <motion.div
-                                className={styles.selectionPanel}
-                                initial={{ opacity: 0, y: 20 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: 20 }}
-                            >
-                                <div className={styles.selectionPanelHeader}>
-                                    <Plane size={18} />
-                                    <h3>Select Your Flight</h3>
-                                    <span className={styles.currencyBadge}>Prices in ₹ INR</span>
-                                </div>
-                                <div className={styles.selectionCards}>
-                                    {availableFlights.map((flight, i) => (
-                                        <FlightCard
-                                            key={i}
-                                            flight={{ ...flight, index: i + 1 }}
-                                            onSelect={handleFlightSelect}
-                                        />
-                                    ))}
-                                </div>
-                                <p className={styles.selectionHint}>
-                                    💡 Economy class assumed. Mention &quot;business class&quot; if needed.
-                                </p>
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
-
-                    {/* ── Hotel Selection UI ── */}
-                    <AnimatePresence>
-                        {availableHotels.length > 0 && (
-                            <motion.div
-                                className={styles.selectionPanel}
-                                initial={{ opacity: 0, y: 20 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: 20 }}
-                            >
-                                <div className={styles.selectionPanelHeader}>
-                                    <Hotel size={18} />
-                                    <h3>Select Your Hotel</h3>
-                                    <span className={styles.currencyBadge}>Prices in ₹ INR</span>
-                                </div>
-                                <div className={styles.selectionCards}>
-                                    {availableHotels.map((hotel, i) => (
-                                        <HotelCard
-                                            key={i}
-                                            hotel={{ ...hotel, index: i + 1 }}
-                                            onSelect={handleHotelSelect}
-                                        />
-                                    ))}
-                                </div>
-                                <p className={styles.selectionHint}>
-                                    💡 3-star hotel assumed. Mention &quot;luxury&quot; or &quot;budget&quot; if needed.
-                                </p>
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
 
                     {/* ── Itinerary Review (while reviewing) ── */}
                     <AnimatePresence>
