@@ -1,0 +1,40 @@
+# Virtual environments
+venv/
+voyage/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Environment and secrets (use -e or docker-compose env instead)
+.env
+.env.*
+!.env.example
+
+# Git and IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Tests and dev
+.pytest_cache/
+.coverage
+htmlcov/
+*.md
+!README.md
+
+# Misc
+.DS_Store
+*.log
