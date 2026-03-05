@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output (we build inside Docker)
+.next/
+out/
+
+# Env files (use build-arg or runtime env instead)
+.env
+.env.*
+!.env.example
+
+# Git and IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Misc
+.DS_Store
+*.log
+npm-debug.log*
+README.md
+backend_docs.md
+api_docs.md*
