@@ -6,9 +6,14 @@ All prices are in INR (Indian Rupees).
 
 import json
 import hashlib
+from datetime import datetime, timedelta
+from typing import Optional
 from amadeus import Client, ResponseError
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field
 from src.config import settings
 from src.database import get_redis_client
+from src.agent.utils.tracing import trace_tool_execution
 
 HOTEL_CACHE_TTL = 1800  # 30 minutes
 
@@ -81,10 +86,22 @@ def _cache_set(cache_key: str, data: dict):
         pass
 
 
+class HotelSearchInput(BaseModel):
+    """Input schema for hotel search tool."""
+    city_code: str = Field(..., description="IATA city code for the destination (e.g., 'PAR', 'TYO', 'NYC')")
+    checkin: Optional[str] = Field(None, description="Check-in date in YYYY-MM-DD format")
+    checkout: Optional[str] = Field(None, description="Check-out date in YYYY-MM-DD format")
+    guests: int = Field(1, description="Number of guests", ge=1, le=8)
+    radius: int = Field(30, description="Search radius from city center", ge=1, le=300)
+    radius_unit: str = Field("KM", description="Radius unit: 'KM' or 'MI'")
+
+
+@tool("search_hotels", args_schema=HotelSearchInput)
+@trace_tool_execution("search_hotels")
 def search_hotels(
     city_code: str,
-    checkin: str = None,
-    checkout: str = None,
+    checkin: Optional[str] = None,
+    checkout: Optional[str] = None,
     guests: int = 1,
     radius: int = 30,
     radius_unit: str = "KM",
@@ -115,37 +132,79 @@ def search_hotels(
         return cached
     
     # ── API call ──
+    # Amadeus v3: hotelIds = comma-separated string; checkInDate/checkOutDate required; adults string
     try:
         amadeus = _get_amadeus_client()
         
+        city_code_upper = (city_code or "").upper().strip()[:3]
+        if len(city_code_upper) != 3:
+            return {
+                "city_code": city_code,
+                "error": "City code must be a 3-letter IATA code (e.g. PAR, TYO, NYC).",
+                "hotels": [],
+            }
+        
+        # Default dates if not provided; API requires future dates only
+        today = datetime.now().date()
+        
+        def parse_date(s):
+            if not s:
+                return None
+            try:
+                return datetime.strptime(str(s).strip()[:10], "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                return None
+        
+        checkin_d = parse_date(checkin)
+        if checkin_d is None or checkin_d < today:
+            checkin_date = (today + timedelta(days=1)).strftime("%Y-%m-%d")
+        else:
+            checkin_date = checkin_d.strftime("%Y-%m-%d")
+        
+        checkin_d = parse_date(checkin_date)
+        checkout_d = parse_date(checkout)
+        ci = checkin_d or (today + timedelta(days=1))
+        if checkout_d is None:
+            checkout_date = (ci + timedelta(days=3)).strftime("%Y-%m-%d")
+        elif checkout_d < today or checkout_d <= ci:
+            checkout_date = (ci + timedelta(days=3)).strftime("%Y-%m-%d")
+        else:
+            checkout_date = checkout_d.strftime("%Y-%m-%d")
+        
         # ── Step 1: Get hotel IDs by city ──
         hotel_list_response = amadeus.reference_data.locations.hotels.by_city.get(
-            cityCode=city_code,
+            cityCode=city_code_upper,
             radius=radius,
             radiusUnit=radius_unit,
         )
         
         if not hotel_list_response.data:
             return {
-                "city_code": city_code,
+                "city_code": city_code_upper,
                 "hotels": [],
                 "total_results": 0,
                 "message": "No hotels found for this city code.",
             }
         
-        # Take top 5 hotel IDs
-        hotel_ids = [h["hotelId"] for h in hotel_list_response.data[:5]]
+        # Take top 5 hotel IDs; API expects comma-separated string
+        hotel_id_list = [h.get("hotelId") or h.get("hotel_id") for h in hotel_list_response.data[:5]]
+        hotel_id_list = [h for h in hotel_id_list if h]
+        if not hotel_id_list:
+            return {
+                "city_code": city_code_upper,
+                "hotels": [],
+                "total_results": 0,
+                "message": "No valid hotel IDs returned.",
+            }
+        hotel_ids_str = ",".join(str(h) for h in hotel_id_list)
         
-        # ── Step 2: Get offers for those hotels ──
+        # ── Step 2: Get offers (v3 requires hotelIds, adults, checkInDate; checkOutDate often required) ──
         params = {
-            "hotelIds": hotel_ids,
-            "adults": guests,
-            "currency": "INR",
+            "hotelIds": hotel_ids_str,
+            "adults": str(min(8, max(1, int(guests)))),
+            "checkInDate": checkin_date,
+            "checkOutDate": checkout_date,
         }
-        if checkin:
-            params["checkInDate"] = checkin
-        if checkout:
-            params["checkOutDate"] = checkout
         
         offers_response = amadeus.shopping.hotel_offers_search.get(**params)
         
@@ -172,11 +231,11 @@ def search_hotels(
                 
                 parsed_offers.append({
                     "offer_id": offer.get("id", ""),
-                    "check_in": offer.get("checkInDate", checkin or ""),
-                    "check_out": offer.get("checkOutDate", checkout or ""),
+                    "check_in": offer.get("checkInDate", checkin_date),
+                    "check_out": offer.get("checkOutDate", checkout_date),
                     "price_total": price.get("total", ""),
                     "price_inr": price_total,
-                    "price_currency": price.get("currency", "INR"),
+                    "price_currency": "INR",
                     "price_per_night": price.get("base", ""),
                     "price_per_night_inr": price_base,
                     "room_type": room.get("typeEstimated", {}).get("category", ""),
@@ -187,7 +246,7 @@ def search_hotels(
             hotels.append({
                 "hotel_id": hotel_info.get("hotelId", ""),
                 "name": hotel_info.get("name", ""),
-                "city_code": hotel_info.get("cityCode", city_code),
+                "city_code": hotel_info.get("cityCode", city_code_upper),
                 "latitude": hotel_info.get("latitude"),
                 "longitude": hotel_info.get("longitude"),
                 "offers": parsed_offers,
@@ -196,14 +255,14 @@ def search_hotels(
                 "best_price_per_night_inr": parsed_offers[0]["price_per_night_inr"] if parsed_offers else 0,
                 "room_type": parsed_offers[0]["room_type"] if parsed_offers else "",
                 "bed_type": parsed_offers[0]["bed_type"] if parsed_offers else "",
-                "check_in": checkin or "",
-                "check_out": checkout or "",
+                "check_in": checkin_date,
+                "check_out": checkout_date,
             })
         
         result = {
-            "city_code": city_code,
-            "checkin": checkin,
-            "checkout": checkout,
+            "city_code": city_code_upper,
+            "checkin": checkin_date,
+            "checkout": checkout_date,
             "guests": guests,
             "currency": "INR",
             "hotels": hotels,

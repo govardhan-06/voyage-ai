@@ -6,10 +6,11 @@ import { useAuthStore } from '@/stores/authStore';
 import { usersAPI, tripsAPI } from '@/lib/api';
 import { motion } from 'framer-motion';
 import {
-    Plus, MapPin, Calendar, DollarSign, Sparkles, ArrowRight,
+    Plus, MapPin, Calendar, IndianRupee, Sparkles, ArrowRight,
     Globe, TrendingUp, Clock, User as UserIcon
 } from 'lucide-react';
 import { CardSkeleton } from '@/components/LoadingSkeleton';
+import { formatINR } from '@/lib/format';
 import type { Trip, User, UserPreferences } from '@/types';
 import styles from './page.module.css';
 
@@ -189,7 +190,7 @@ export default function DashboardPage() {
                                     <div className={styles.tripMeta}>
                                         <span><MapPin size={14} /> {trip.trip_constraints.destination}</span>
                                         <span><Calendar size={14} /> {trip.trip_constraints.duration_days} days</span>
-                                        <span><DollarSign size={14} /> ${trip.trip_constraints.budget}</span>
+                                        <span><IndianRupee size={14} /> {formatINR(trip.trip_constraints.budget ?? 0)} INR</span>
                                     </div>
                                     <div className={styles.tripDate}>
                                         {new Date(trip.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}

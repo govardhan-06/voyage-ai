@@ -6,7 +6,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { usersAPI } from '@/lib/api';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-    DollarSign, Compass, Heart, Cloud, Building, UtensilsCrossed,
+    IndianRupee, Compass, Heart, Cloud, Building, UtensilsCrossed,
     ArrowRight, ArrowLeft, Check, Sparkles
 } from 'lucide-react';
 import styles from './page.module.css';
@@ -23,7 +23,7 @@ const RISK_LEVELS = [
 ];
 
 const STEPS = [
-    { icon: <DollarSign size={20} />, label: 'Budget' },
+    { icon: <IndianRupee size={20} />, label: 'Budget' },
     { icon: <Compass size={20} />, label: 'Style' },
     { icon: <Heart size={20} />, label: 'Interests' },
     { icon: <Cloud size={20} />, label: 'Climate' },
@@ -110,7 +110,7 @@ export default function PreferencesPage() {
                         <p className={styles.stepDesc}>Set your comfortable spending range per trip</p>
                         <div className={styles.budgetInputs}>
                             <div className="input-group">
-                                <label className="input-label">Minimum ($)</label>
+                                <label className="input-label">Minimum (₹)</label>
                                 <input
                                     type="number"
                                     className="input"
@@ -121,7 +121,7 @@ export default function PreferencesPage() {
                             </div>
                             <div className={styles.budgetDivider}>to</div>
                             <div className="input-group">
-                                <label className="input-label">Maximum ($)</label>
+                                <label className="input-label">Maximum (₹)</label>
                                 <input
                                     type="number"
                                     className="input"

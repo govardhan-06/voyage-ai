@@ -11,13 +11,8 @@ import {
     Hotel, ChevronRight
 } from 'lucide-react';
 import type { ChatMessage, ChatResponse, Itinerary, ItineraryVersion, FlightOption, HotelOption } from '@/types';
+import { formatINR } from '@/lib/format';
 import styles from './page.module.css';
-
-// ── Helpers ──
-function formatINR(amount: number): string {
-    if (!amount || amount === 0) return '₹0';
-    return `₹${amount.toLocaleString('en-IN')}`;
-}
 
 // ── Flight Selection Card ──
 function FlightCard({
@@ -448,7 +443,7 @@ export default function ChatPage() {
                                     <h3>📋 Draft Itinerary</h3>
                                     <div className={styles.itineraryCost}>
                                         <IndianRupee size={15} />
-                                        {reviewItinerary.total_cost_estimate?.toLocaleString('en-IN')} {reviewItinerary.currency}
+                                        {formatINR(reviewItinerary.total_cost_estimate ?? 0)} INR
                                     </div>
                                 </div>
 
@@ -502,7 +497,7 @@ export default function ChatPage() {
                                                             </div>
                                                             {act.cost_estimate > 0 && (
                                                                 <div className={styles.activityCost}>
-                                                                    ₹{act.cost_estimate.toLocaleString('en-IN')}
+                                                                    {formatINR(act.cost_estimate)}
                                                                 </div>
                                                             )}
                                                         </div>
@@ -550,7 +545,7 @@ export default function ChatPage() {
                                     <h3>✅ Final Itinerary</h3>
                                     <div className={styles.itineraryCost}>
                                         <IndianRupee size={15} />
-                                        {finalItinerary.itinerary.total_cost_estimate?.toLocaleString('en-IN')} {finalItinerary.itinerary.currency}
+                                        {formatINR(finalItinerary.itinerary.total_cost_estimate ?? 0)} INR
                                     </div>
                                 </div>
 
@@ -599,7 +594,7 @@ export default function ChatPage() {
                                                             </div>
                                                             {act.cost_estimate > 0 && (
                                                                 <div className={styles.activityCost}>
-                                                                    ₹{act.cost_estimate.toLocaleString('en-IN')}
+                                                                    {formatINR(act.cost_estimate)}
                                                                 </div>
                                                             )}
                                                         </div>

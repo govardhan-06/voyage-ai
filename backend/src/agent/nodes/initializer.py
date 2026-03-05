@@ -4,7 +4,13 @@ Loads user preferences and saved constraints from MongoDB,
 attaches all context to the initial agent state.
 """
 
+from datetime import datetime
 from src.database import get_database
+
+
+def _today_iso() -> str:
+    """Current date in YYYY-MM-DD for prompts and validation."""
+    return datetime.now().strftime("%Y-%m-%d")
 
 
 async def initializer_node(state: dict) -> dict:
@@ -27,6 +33,7 @@ async def initializer_node(state: dict) -> dict:
             pass  # If user not found, proceed with empty preferences
     
     return {
+        "current_date": _today_iso(),
         "user_preferences": user_preferences,
         "trip_request": {},
         "slots_complete": False,

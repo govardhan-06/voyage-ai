@@ -1,11 +1,8 @@
-"""Node 2.5: Flight Selection – Human-in-the-Loop.
+"""Node 2.5: Flight Selection – Auto-select first option.
 
-Presents available flights from tool_results to the user.
-The graph pauses (interrupt_before) so the user can pick a flight.
-When resumed, validates the selection and stores it in state.
-
+Extracts available flights from tool_results and auto-selects the first one.
 If no flights are available (API error or no results),
-this node auto-selects a fallback assumption and continues.
+this node uses a fallback assumption and continues.
 """
 
 from src.agent.state import AgentState
@@ -58,69 +55,15 @@ def _extract_flights_for_display(tool_results: dict) -> list:
     return display_flights
 
 
-def _format_flight_message(flights: list, trip_request: dict) -> str:
-    """Format the flight selection message for the user."""
-    origin = trip_request.get("origin", "your city")
-    destination = trip_request.get("destination", "your destination")
-    departure_date = trip_request.get("start_date", "")
-    
-    lines = [
-        f"✈️ **Great! I found {len(flights)} flight options** from {origin} to {destination}",
-        f"{'on ' + departure_date if departure_date else ''}.",
-        "",
-        "Please choose your preferred flight by replying with the number (1, 2, 3...):",
-        "",
-    ]
-    
-    for f in flights:
-        stops_text = "Non-stop" if f["stops"] == 0 else f"{f['stops']} stop(s)"
-        price_text = f"₹{f['price_inr']:,.0f}" if f["price_inr"] > 0 else "Price on request"
-        dep_time = f["departure_time"][:16].replace("T", " ") if f["departure_time"] else "TBD"
-        arr_time = f["arrival_time"][:16].replace("T", " ") if f["arrival_time"] else "TBD"
-        
-        lines.append(
-            f"**{f['index']}.** {f['airline']} {f['flight_number']} | {f['booking_class']} | "
-            f"{stops_text} | {price_text}\n"
-            f"   🕐 Departs: {dep_time} → Arrives: {arr_time} | Duration: {f['duration']}"
-        )
-        lines.append("")
-    
-    lines.append("💡 *Assumption: Economy class selected by default. Mention 'business class' if you'd prefer an upgrade.*")
-    
-    return "\n".join(lines)
-
-
 async def flight_selection_node(state: dict) -> dict:
     """
-    Present flight options to the user and wait for selection.
-    
-    First run: format and return flight options. Graph pauses (interrupt_before).
-    After resume: the API has already set selected_flight in state via aupdate_state.
-    This node just acknowledges and routes forward.
+    Extract available flights and auto-select the first option.
+    No human-in-the-loop; graph continues to hotel_selection.
     """
-    selected_flight = state.get("selected_flight", {})
-    
-    # If a flight is already selected (resumed after pause), just route forward
-    if selected_flight:
-        airline = selected_flight.get("airline", "your flight")
-        price = selected_flight.get("price_inr", 0)
-        price_text = f" (₹{price:,.0f})" if price > 0 else ""
-        return {
-            "selection_step": "awaiting_hotel",
-            "current_node": "hotel_selection",
-            "messages": [{
-                "role": "ai",
-                "content": f"✅ Flight selected: {airline}{price_text}. Now let's pick your hotel!"
-            }]
-        }
-    
-    # ── First run: extract and present available flights ──
     tool_results = state.get("tool_results", {})
-    trip_request = state.get("trip_request", {})
-    
     available_flights = _extract_flights_for_display(tool_results)
     
-    # If no flights found, use assumption and skip selection
+    # If no flights found, use assumption and continue
     if not available_flights:
         return {
             "available_flights": [],
@@ -138,12 +81,19 @@ async def flight_selection_node(state: dict) -> dict:
             }]
         }
     
-    # Present options — graph will pause here via interrupt_before
-    message = _format_flight_message(available_flights, trip_request)
+    # Auto-select the first flight and continue to hotel selection
+    chosen = available_flights[0]
+    airline = chosen.get("airline", "your flight")
+    price = chosen.get("price_inr", 0)
+    price_text = f" (₹{price:,.0f})" if price > 0 else ""
     
     return {
         "available_flights": available_flights,
-        "selection_step": "awaiting_flight",
-        "current_node": "flight_selection",
-        "messages": [{"role": "ai", "content": message}]
+        "selected_flight": chosen,
+        "selection_step": "awaiting_hotel",
+        "current_node": "hotel_selection",
+        "messages": [{
+            "role": "ai",
+            "content": f"✅ I've selected {airline}{price_text} for you. Now let's pick your hotel!"
+        }]
     }

@@ -68,17 +68,17 @@ export const authAPI = {
 
 export const usersAPI = {
     getMe: async (): Promise<User> => {
-        const res = await api.get('/users/me');
+        const res = await api.get('/users/me', { params: { _rsc: '' } });
         return res.data;
     },
 
     getPreferences: async (): Promise<UserPreferences> => {
-        const res = await api.get('/users/me/preferences');
+        const res = await api.get('/users/me/preferences', { params: { _rsc: '' } });
         return res.data;
     },
 
     updatePreferences: async (data: Partial<UserPreferences>): Promise<UserPreferences> => {
-        const res = await api.patch('/users/me/preferences', data);
+        const res = await api.patch('/users/me/preferences', data, { params: { _rsc: '' } });
         return res.data;
     },
 };

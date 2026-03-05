@@ -1,0 +1,338 @@
+# Voyage AI Backend API Documentation
+
+This document outlines the detailed API endpoints, request bodies, and response structures for the Voyage AI Backend. It is intended for frontend integration purposes.
+
+The base URL for all endpoints is effectively the API host address. Note that most protected routes (Users, Trips endpoints that need auth context) will require a Bearer token in the `Authorization` header.
+
+---
+
+## Table of Contents
+1. [Authentication API](#1-authentication-api)
+2. [Users API](#2-users-api)
+3. [Trips API](#3-trips-api)
+4. [Shared Models](#5-shared-models)
+
+---
+
+## 1. Authentication API
+Endpoints for user registration and login.
+Base path: `/auth`
+
+### 1.1 Register User
+Registers a new user in the system.
+
+- **URL:** `/auth/register`
+- **Method:** `POST`
+- **Request Body (JSON):**
+  ```json
+  {
+    "email": "user@example.com",
+    "password": "securepassword",
+    "name": "John Doe" // Optional
+  }
+  ```
+- **Success Response (200 OK):**
+  Returns a [UserResponse](file:///Users/govardhan06/Documents/Voyage-AI/backend/src/models/user.py#49-58) object.
+  ```json
+  {
+    "email": "user@example.com",
+    "name": "John Doe",
+    "_id": "60a7b1b3b3b3b3b3b3b3b3b3",
+    "created_at": "2023-10-27T10:00:00.000Z",
+    "updated_at": "2023-10-27T10:00:00.000Z",
+    "preferences": null,
+    "metadata": {
+      "last_login": null,
+      "total_trips": 0
+    }
+  }
+  ```
+- **Error Responses:**
+  - `400 Bad Request`: When the email is already registered.
+
+### 1.2 Login User
+Authenticates a user and returns an access token. Note that the FastAPI `OAuth2PasswordBearer` expects form data or body matching parameter names in typical setups, but this specific endpoint is implemented expecting JSON context via `Body(...)`.
+
+- **URL:** `/auth/login`
+- **Method:** `POST`
+- **Request Body (JSON):**
+  ```json
+  {
+    "email": "user@example.com",
+    "password": "securepassword"
+  }
+  ```
+- **Success Response (200 OK):**
+  ```json
+  {
+    "access_token": "eyJhbGciOiJIUzI1NiIsInR5c...",
+    "token_type": "bearer",
+    "user_id": "60a7b1b3b3b3b3b3b3b3b3b3"
+  }
+  ```
+- **Error Responses:**
+  - `401 Unauthorized`: Incorrect email or password.
+
+---
+
+## 2. Users API
+Endpoints for retrieving and managing the authenticated user's profile and preferences. Protected by `get_current_user` dependency (requires Bearer token).
+Base path: `/users`
+
+### 2.1 Get Current User
+Retrieves the profile of the currently logged-in user.
+
+- **URL:** `/users/me`
+- **Method:** `GET`
+- **Headers:** `Authorization: Bearer <token>`
+- **Success Response (200 OK):**
+  Returns a `UserResponse` object. (See section 1.1 reaction structure, preferences will be populated if set).
+
+### 2.2 Get User Preferences
+Retrieves the travel preferences of the current user.
+
+- **URL:** `/users/me/preferences`
+- **Method:** `GET`
+- **Headers:** `Authorization: Bearer <token>`
+- **Success Response (200 OK):**
+  Returns a `UserPreferences` object.
+  ```json
+  {
+    "budget_range": {
+      "min": 1000,
+      "max": 50000
+    },
+    "travel_style": ["luxury", "adventure"],
+    "interests": ["history", "food"],
+    "preferred_climate": ["tropical"],
+    "preferred_destinations": ["international"],
+    "accommodation_type": ["resort"],
+    "food_preferences": ["vegetarian"],
+    "activity_preferences": ["sightseeing"],
+    "risk_tolerance": "moderate"
+  }
+  ```
+
+### 2.3 Update User Preferences
+Partially updates the user's travel preferences.
+
+- **URL:** `/users/me/preferences`
+- **Method:** `PATCH`
+- **Headers:** `Authorization: Bearer <token>`
+- **Request Body (JSON):**
+  Pass only the fields you wish to update (partial `UserPreferences`).
+  ```json
+  {
+    "travel_style": ["budget", "backpacking"],
+    "budget_range": {
+      "max": 20000
+    }
+  }
+  ```
+- **Success Response (200 OK):**
+  Returns the updated `UserPreferences` object.
+
+---
+
+## 3. Trips API
+Endpoints for managing trips, agent chat sessions, and itinerary generation.
+Base path: `/trips`
+
+### 3.1 List User Trips
+List all trips for a specific user with optional filtering and pagination.
+
+- **URL:** `/trips/user/{user_id}`
+- **Method:** `GET`
+- **Query Parameters:**
+  - `from_date` (string, optional): Start date (YYYY-MM-DD)
+  - `to_date` (string, optional): End date (YYYY-MM-DD)
+  - `trip_status` (string, optional): 'planning', 'finalized', or 'cancelled'
+  - `skip` (integer, default 0): For pagination
+  - `limit` (integer, default 20, max 100): Page size
+- **Success Response (200 OK):**
+  ```json
+  {
+    "trips": [
+      {
+         "_id": "trip_id_string",
+         "user_id": "user_id_string",
+         "title": "Trip to Paris",
+         "status": "finalized",
+         "created_at": "...",
+         // ... (trip object structure)
+      }
+    ],
+    "total": 5,
+    "skip": 0,
+    "limit": 20
+  }
+  ```
+
+### 3.2 List User Itineraries
+List itinerary versions across all trips for a user.
+
+- **URL:** `/trips/user/{user_id}/itineraries`
+- **Method:** `GET`
+- **Query Parameters:**
+  - `from_date` (string, optional): Start date (YYYY-MM-DD)
+  - `to_date` (string, optional): End date (YYYY-MM-DD)
+  - `skip` (integer, default 0)
+  - `limit` (integer, default 20)
+- **Success Response (200 OK):**
+  ```json
+  {
+    "itineraries": [
+      {
+        "_id": "itinerary_id",
+        "trip_id": "trip_id",
+        "version_number": 1,
+        // ... (itinerary fields)
+      }
+    ],
+    "total": 3,
+    "skip": 0,
+    "limit": 20
+  }
+  ```
+
+### 3.3 Planner Chat Session (Agent Interaction)
+This is the core endpoint for AI trip planning interaction. Needs to be called multiple times per session, carrying the `thread_id` to continue state.
+
+- **URL:** `/trips/chat`
+- **Method:** `POST`
+- **Request Body (JSON):**
+  ```json
+  {
+    "user_id": "user_id_string",
+    "message": "I want to go to Goa for 4 days next week",
+    "thread_id": "existing-thread-id-or-null-for-new-session"
+  }
+  ```
+- **Success Response (200 OK):**
+  The precise contents of `data` depend on the `status`.
+
+  *Possible Statuses:*
+  - **`clarifying`**: Agent needs more info. Show the message to user to collect input.
+    ```json
+    {
+       "status": "clarifying",
+       "thread_id": "uuid-for-the-session",
+       "message": "When exactly next week do you want to travel?",
+       "data": {
+           "slots_collected": { "destination": "Goa", "duration_days": 4 }
+       }
+    }
+    ```
+  - **`planning`**: Background planner is working (usually an intermediary transition).
+    ```json
+    {
+       "status": "planning",
+       "thread_id": "uuid",
+       "message": "We are looking into flights and hotels...",
+       "data": { "trip_request": {...} }
+    }
+    ```
+  - **`reviewing`**: Pre-finalization interrupt. Draft itinerary ready for review. Must respond 'approve' or provide feedback.
+    ```json
+    {
+       "status": "reviewing",
+       "thread_id": "uuid",
+       "message": "Here's your draft itinerary...",
+       "data": {
+           "itinerary": {"days": [...]},
+           "trip_request": {...},
+           "trip_strategy": {...},
+           "selected_flight": {...},
+           "selected_hotel": {...}
+       }
+    }
+    ```
+  - **`complete`**: The trip successfully planned and saved.
+    ```json
+    {
+       "status": "complete",
+       "thread_id": "uuid",
+       "message": "Your trip has been planned!",
+       "data": {
+           "trip_id": "generated_trip_id",
+           "itinerary_version_id": "generated_itinerary_version_id",
+           "itinerary": {"days": [...]},
+           "trip_request": {...},
+           "selected_flight": {...},
+           "selected_hotel": {...}
+       }
+    }
+    ```
+
+### 3.4 Get Trip Details
+Retrieve full context for a single trip.
+
+- **URL:** `/trips/{trip_id}`
+- **Method:** `GET`
+- **Success Response (200 OK):**
+  Returns the Trip document dictionary with a string `_id`.
+
+### 3.5 Get Latest Trip Itinerary
+Retrieve the latest itinerary version tied to a specific trip.
+
+- **URL:** `/trips/{trip_id}/itinerary`
+- **Method:** `GET`
+- **Success Response (200 OK):**
+  Returns the Itinerary Version dictionary.
+
+### 3.6 Get Trip Conversations
+Retrieve conversation logs for a trip.
+
+- **URL:** `/trips/{trip_id}/conversations`
+- **Method:** `GET`
+- **Success Response (200 OK):**
+  Returns the Conversation DB document.
+
+### 3.7 Export Trip Itinerary
+Export finalized itinerary into JSON or formatted Text representation.
+
+- **URL:** `/trips/{trip_id}/export`
+- **Method:** `GET`
+- **Query Parameters:**
+  - `format` (string, optional): 'json' (default) or 'text'
+- **Success Response:**
+  If json, returns a structured JSON payload with cost breakdown, activity/flight/hotel details, suitable for download.
+  If text, returns a text property in JSON body.
+
+---
+
+## 4. Shared Models
+
+### `UserPreferences` Structure
+```json
+{
+  "budget_range": {
+    "min": 0,
+    "max": 100000
+  },
+  "travel_style": ["string"],
+  "interests": ["string"],
+  "preferred_climate": ["string"],
+  "preferred_destinations": ["string"],
+  "accommodation_type": ["string"],
+  "food_preferences": ["string"],
+  "activity_preferences": ["string"],
+  "risk_tolerance": "string"
+}
+```
+
+### `UserResponse` Structure
+```json
+{
+  "email": "user@example.com",
+  "name": "Jane User",
+  "_id": "60ab1...",
+  "created_at": "ISO-Date",
+  "updated_at": "ISO-Date",
+  "preferences": {}, // Matches UserPreferences structure
+  "metadata": {
+    "last_login": "ISO-Date",
+    "total_trips": 2
+  }
+}
+```

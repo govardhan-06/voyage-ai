@@ -5,10 +5,11 @@ import { useParams, useRouter } from 'next/navigation';
 import { tripsAPI } from '@/lib/api';
 import { motion } from 'framer-motion';
 import {
-    MapPin, Clock, DollarSign, Calendar, Tag, ArrowLeft,
+    MapPin, Clock, IndianRupee, Calendar, Tag, ArrowLeft,
     Edit3, Check, X, ExternalLink, Loader2
 } from 'lucide-react';
 import { ItinerarySkeleton } from '@/components/LoadingSkeleton';
+import { formatINR } from '@/lib/format';
 import type { Trip, ItineraryVersion, Activity } from '@/types';
 import styles from './page.module.css';
 
@@ -121,8 +122,8 @@ export default function ItineraryPage() {
                             </>
                         )}
                         <span className={styles.metaItem}>
-                            <DollarSign size={16} />
-                            {itinerary.total_cost_estimate || totalCost} {itinerary.currency || 'USD'}
+                            <IndianRupee size={16} />
+                            {formatINR(itinerary.total_cost_estimate || totalCost)} INR
                         </span>
                     </div>
                 </div>
@@ -219,7 +220,7 @@ export default function ItineraryPage() {
                                                             )}
                                                             {activity.cost_estimate > 0 && (
                                                                 <span className={styles.costChip}>
-                                                                    <DollarSign size={12} /> ${activity.cost_estimate}
+                                                                    <IndianRupee size={12} /> {formatINR(activity.cost_estimate)}
                                                                 </span>
                                                             )}
                                                             {loc?.name && (
@@ -264,13 +265,13 @@ export default function ItineraryPage() {
                                 return (
                                     <div key={day.day_number} className={styles.costRow}>
                                         <span>Day {day.day_number}</span>
-                                        <span>${dayCost}</span>
+                                        <span>{formatINR(dayCost)}</span>
                                     </div>
                                 );
                             })}
                             <div className={`${styles.costRow} ${styles.costTotal}`}>
                                 <span>Total</span>
-                                <span>${totalCost}</span>
+                                <span>{formatINR(totalCost)}</span>
                             </div>
                         </div>
                     </div>
@@ -288,7 +289,7 @@ export default function ItineraryPage() {
                             </div>
                             <div className={styles.detailRow}>
                                 <span>Budget</span>
-                                <span>${trip.trip_constraints.budget}</span>
+                                <span>{formatINR(trip.trip_constraints.budget ?? 0)} INR</span>
                             </div>
                             <div className={styles.detailRow}>
                                 <span>Travelers</span>

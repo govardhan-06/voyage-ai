@@ -1,9 +1,7 @@
 """LangGraph assembly – Human-in-the-Loop with Checkpointing.
 
-Uses interrupt_before pattern for four pause points:
-1. Before flight_selection (to show flight options for user to pick)
-2. Before hotel_selection (to show hotel options for user to pick)
-3. Before review (to show draft itinerary for approval)
+Uses interrupt_before only for review (draft itinerary approval).
+Flight and hotel selection auto-pick the first option (no pause).
 
 Graph flow:
   initializer → intent_slot → (loop via interrupt | proceed)
@@ -23,6 +21,7 @@ from src.agent.nodes.hotel_selection import hotel_selection_node
 from src.agent.nodes.itinerary_gen import itinerary_gen_node
 from src.agent.nodes.review import review_node
 from src.agent.nodes.finalizer import finalizer_node
+from src.agent.utils.middleware import optimize_state_between_nodes
 
 
 def _route_after_intent_slot(state: dict) -> str:
@@ -49,6 +48,18 @@ def _route_after_review(state: dict) -> str:
     return "planner"
 
 
+async def memory_optimizer_node(state: dict) -> dict:
+    """
+    Memory optimization node to prune messages between major transitions.
+    
+    This lightweight node optimizes state without changing the core logic.
+    """
+    optimized_state = optimize_state_between_nodes(state)
+    
+    # Don't change the current_node - just pass through with optimized state
+    return optimized_state
+
+
 def build_travel_graph():
     """Build and compile the LangGraph travel planning graph with checkpointing."""
     
@@ -57,9 +68,11 @@ def build_travel_graph():
     # Add nodes
     graph.add_node("initializer", initializer_node)
     graph.add_node("intent_slot", intent_slot_node)
+    graph.add_node("memory_optimizer_1", memory_optimizer_node)  # After slot filling
     graph.add_node("planner", planner_node)
     graph.add_node("flight_selection", flight_selection_node)
     graph.add_node("hotel_selection", hotel_selection_node)
+    graph.add_node("memory_optimizer_2", memory_optimizer_node)  # After selections
     graph.add_node("itinerary_gen", itinerary_gen_node)
     graph.add_node("review", review_node)
     graph.add_node("finalizer", finalizer_node)
@@ -70,39 +83,43 @@ def build_travel_graph():
     # Edges
     graph.add_edge("initializer", "intent_slot")
     
-    # intent_slot → planner (complete) or → END (needs clarification)
+    # intent_slot → memory_optimizer_1 → planner (complete) or → END (needs clarification)
     graph.add_conditional_edges(
         "intent_slot",
         _route_after_intent_slot,
         {
             "__end__": END,
-            "planner": "planner"
+            "planner": "memory_optimizer_1"
         }
     )
     
-    # planner → flight_selection → hotel_selection → itinerary_gen
+    # Memory optimization before planning
+    graph.add_edge("memory_optimizer_1", "planner")
+    
+    # planner → flight_selection → hotel_selection → memory_optimizer_2 → itinerary_gen
     graph.add_edge("planner", "flight_selection")
     graph.add_edge("flight_selection", "hotel_selection")
-    graph.add_edge("hotel_selection", "itinerary_gen")
+    graph.add_edge("hotel_selection", "memory_optimizer_2")
+    graph.add_edge("memory_optimizer_2", "itinerary_gen")
     graph.add_edge("itinerary_gen", "review")
     
-    # review → finalizer (approved) or → planner (revision)
+    # review → finalizer (approved) or → memory_optimizer_1 → planner (revision)
     graph.add_conditional_edges(
         "review",
         _route_after_review,
         {
             "finalizer": "finalizer",
-            "planner": "planner"
+            "planner": "memory_optimizer_1"  # Optimize memory before re-planning
         }
     )
     
     graph.add_edge("finalizer", END)
     
-    # Compile with checkpointer + interrupt before selection and review nodes
+    # Compile with checkpointer + interrupt only before review (itinerary approval)
     checkpointer = MemorySaver()
     return graph.compile(
         checkpointer=checkpointer,
-        interrupt_before=["flight_selection", "hotel_selection", "review"]
+        interrupt_before=["review"]
     )
 
 

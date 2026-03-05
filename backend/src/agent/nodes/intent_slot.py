@@ -11,6 +11,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from src.config import settings
 from src.agent.schemas import SlotFillingResponse
+from src.agent.utils.tracing import trace_agent_node, trace_llm_call
 
 MAX_CLARIFICATION_ROUNDS = 3
 
@@ -22,18 +23,21 @@ Required information (slots):
 3. origin - Where the user is traveling FROM (city). Ask if not mentioned.
 4. origin_iata - The IATA airport/city code for the origin city. Resolve this yourself. Examples: New York → JFK, Delhi → DEL, Mumbai → BOM, Los Angeles → LAX, Chicago → ORD, San Francisco → SFO, Hyderabad → HYD, Bangalore → BLR, Chennai → MAA.
 5. duration_days - How many days
-6. budget_min / budget_max - Budget range in USD
+6. budget_min / budget_max - Budget range in INR (Indian Rupees)
 7. travel_group - solo, couple, family, or friends
 8. traveler_count - Number of travelers
-9. start_date - Trip start date (YYYY-MM-DD). If the user says "next month" or "in March", convert to an actual date.
+9. start_date - Trip start date (YYYY-MM-DD). If the user says "next month" or "in March", convert to an actual date using today's date as reference. The start_date MUST be on or after today ({current_date}).
 10. interests - What they want to do (culture, adventure, food, shopping, nature, etc.)
 
 Optional but helpful:
-- end_date - Trip end date (auto-calculated from start_date + duration_days if not given)
+- end_date - Trip end date (auto-calculated from start_date + duration_days if not given). Must be after start_date.
 - constraints - Special requirements (accessibility, dietary, etc.)
+
+Today's date (use this for any relative dates like "next week", "in March"): {current_date}. Year: {current_year}.
 
 Rules:
 - Extract as much as possible from the user's message.
+- When interpreting dates, today is {current_date}. All start_date and end_date values must be in the future (on or after today).
 - ALWAYS resolve IATA codes when you know the origin or destination city. Use the nearest major international airport.
 - If information is missing, set follow_up_question to ask about the MOST important missing slot.
 - Prioritize asking for: destination, origin, start_date, duration_days, budget in that order.
@@ -44,10 +48,37 @@ Rules:
 
 User preferences from their profile (use as fallbacks):
 {user_preferences}
-
-Respond with a JSON object matching this exact schema:
-{schema}
 """
+
+
+def _ensure_future_dates(slots: dict) -> dict:
+    """Ensure start_date and end_date are never in the past. Uses today for comparison."""
+    today = datetime.now().date()
+    for key in ("start_date", "end_date"):
+        val = slots.get(key)
+        if not val:
+            continue
+        try:
+            d = datetime.strptime(val, "%Y-%m-%d").date()
+            if d < today:
+                if key == "start_date":
+                    slots["start_date"] = today.strftime("%Y-%m-%d")
+                else:
+                    # end_date: keep at least start_date
+                    start_val = slots.get("start_date")
+                    if start_val:
+                        start_d = datetime.strptime(start_val, "%Y-%m-%d").date()
+                        if start_d >= today:
+                            slots["end_date"] = start_val
+                        else:
+                            slots["end_date"] = today.strftime("%Y-%m-%d")
+                    else:
+                        slots["end_date"] = today.strftime("%Y-%m-%d")
+        except (ValueError, TypeError):
+            pass
+    # Recompute end_date from start_date + duration_days if we changed start_date
+    _compute_end_date(slots)
+    return slots
 
 
 def _get_llm():
@@ -55,7 +86,7 @@ def _get_llm():
         model=settings.LLM_MODEL,
         google_api_key=settings.GOOGLE_API_KEY,
         temperature=0.1,
-    )
+    ).with_structured_output(SlotFillingResponse)
 
 
 def _merge_with_preferences(slots: dict, preferences: dict) -> dict:
@@ -118,6 +149,7 @@ def _check_completeness(slots: dict) -> bool:
     return True
 
 
+@trace_agent_node("intent_slot")
 async def intent_slot_node(state: dict) -> dict:
     """
     Extract trip requirements from user message.
@@ -130,6 +162,8 @@ async def intent_slot_node(state: dict) -> dict:
     user_preferences = state.get("user_preferences", {})
     clarification_count = state.get("clarification_count", 0)
     existing_slots = state.get("trip_request", {})
+    current_date = state.get("current_date") or datetime.now().strftime("%Y-%m-%d")
+    current_year = current_date[:4] if len(current_date) >= 4 else str(datetime.now().year)
     
     # Get the latest user message
     user_message = ""
@@ -150,10 +184,10 @@ async def intent_slot_node(state: dict) -> dict:
     
     llm = _get_llm()
     
-    schema_str = json.dumps(SlotFillingResponse.model_json_schema(), indent=2)
     system_prompt = SLOT_FILLING_SYSTEM_PROMPT.format(
-        user_preferences=json.dumps(user_preferences, indent=2, default=str),
-        schema=schema_str
+        current_date=current_date,
+        current_year=current_year,
+        user_preferences=json.dumps(user_preferences, indent=2, default=str)
     )
     
     # Include existing slots context if we're in a clarification loop
@@ -166,19 +200,10 @@ async def intent_slot_node(state: dict) -> dict:
         HumanMessage(content=user_message)
     ]
     
-    response = await llm.ainvoke(llm_messages)
-    
-    # Parse response
+    # Use structured output - no manual JSON parsing needed
     try:
-        response_text = response.content
-        if "```json" in response_text:
-            response_text = response_text.split("```json")[1].split("```")[0].strip()
-        elif "```" in response_text:
-            response_text = response_text.split("```")[1].split("```")[0].strip()
-        
-        parsed = json.loads(response_text)
-        slot_response = SlotFillingResponse(**parsed)
-    except (json.JSONDecodeError, Exception):
+        slot_response = await llm.ainvoke(llm_messages)
+    except Exception:
         slot_response = SlotFillingResponse(
             follow_up_question="I had trouble understanding that. Could you tell me where you'd like to go and for how long?",
             is_complete=False
@@ -190,6 +215,9 @@ async def intent_slot_node(state: dict) -> dict:
     
     # Try filling from preferences
     merged_slots = _merge_with_preferences(merged_slots, user_preferences)
+    
+    # Ensure start_date and end_date are never in the past (fixes Amadeus 400)
+    merged_slots = _ensure_future_dates(merged_slots)
     
     # Check completeness
     is_complete = _check_completeness(merged_slots)

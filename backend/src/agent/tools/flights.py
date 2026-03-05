@@ -6,9 +6,17 @@ All prices are returned in INR (Indian Rupees).
 
 import json
 import hashlib
+from datetime import datetime, timedelta
+from typing import Optional
 from amadeus import Client, ResponseError
+
+# Approximate USD/EUR to INR for display when API returns non-INR
+CURRENCY_TO_INR = {"USD": 91.0, "EUR": 100.0, "INR": 1.0}
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field
 from src.config import settings
 from src.database import get_redis_client
+from src.agent.utils.tracing import trace_tool_execution
 
 FLIGHT_CACHE_TTL = 900  # 15 minutes
 
@@ -82,11 +90,22 @@ def _cache_set(cache_key: str, data: dict):
         pass
 
 
+class FlightSearchInput(BaseModel):
+    """Input schema for flight search tool."""
+    origin: str = Field(..., description="IATA airport/city code for departure (e.g., 'BOM', 'DEL', 'BLR')")
+    destination: str = Field(..., description="IATA airport/city code for arrival (e.g., 'NRT', 'CDG', 'DPS')")
+    departure_date: str = Field(..., description="Departure date in YYYY-MM-DD format")
+    return_date: Optional[str] = Field(None, description="Optional return date in YYYY-MM-DD format for round-trip")
+    travelers: int = Field(1, description="Number of adult travelers", ge=1, le=9)
+
+
+@tool("search_flights", args_schema=FlightSearchInput)
+@trace_tool_execution("search_flights")
 def search_flights(
     origin: str,
     destination: str,
     departure_date: str,
-    return_date: str = None,
+    return_date: Optional[str] = None,
     travelers: int = 1
 ) -> dict:
     """
@@ -110,20 +129,58 @@ def search_flights(
         return cached
     
     # ── API call ──
+    # Amadeus GET /v2/shopping/flight-offers: required = originLocationCode, destinationLocationCode, departureDate, adults
+    # API rejects past dates; ensure departure and return are always in the future
     try:
         amadeus = _get_amadeus_client()
         
-        params = {
-            "originLocationCode": origin,
-            "destinationLocationCode": destination,
-            "departureDate": departure_date,
-            "adults": travelers,
-            "max": 5,
-            "currencyCode": "INR",
-        }
+        origin_code = (origin or "").upper().strip()[:3]
+        destination_code = (destination or "").upper().strip()[:3]
+        if len(origin_code) != 3 or len(destination_code) != 3:
+            return {
+                "origin": origin,
+                "destination": destination,
+                "error": "Origin and destination must be 3-letter IATA codes (e.g. DEL, BOM).",
+                "flights": [],
+            }
         
+        today = datetime.now().date()
+        
+        def parse_date(s):
+            if not s:
+                return None
+            try:
+                return datetime.strptime(s.strip()[:10], "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                return None
+        
+        dep_d = parse_date(departure_date)
+        if dep_d is None:
+            departure_date = (today + timedelta(days=1)).strftime("%Y-%m-%d")
+        elif dep_d < today:
+            departure_date = (today + timedelta(days=1)).strftime("%Y-%m-%d")
+        else:
+            departure_date = dep_d.strftime("%Y-%m-%d")
+        
+        ret_d = parse_date(return_date) if return_date else None
+        if ret_d is not None:
+            dep_d = parse_date(departure_date) or today
+            if ret_d < today or ret_d < dep_d:
+                return_date = (dep_d + timedelta(days=1)).strftime("%Y-%m-%d")
+            else:
+                return_date = ret_d.strftime("%Y-%m-%d")
+        
+        adults_count = min(9, max(1, int(travelers)))
+        params = {
+            "originLocationCode": origin_code,
+            "destinationLocationCode": destination_code,
+            "departureDate": departure_date,
+            "adults": adults_count,
+        }
         if return_date:
             params["returnDate"] = return_date
+        # Limit results; omit currencyCode to avoid invalid-parameter 400 in some environments
+        params["max"] = 5
         
         response = amadeus.shopping.flight_offers_search.get(**params)
         
@@ -161,12 +218,15 @@ def search_flights(
                 price_total = float(price_info.get("grandTotal", 0))
             except (ValueError, TypeError):
                 price_total = 0
+            api_currency = (price_info.get("currency") or "USD").upper()
+            rate = CURRENCY_TO_INR.get(api_currency, CURRENCY_TO_INR["USD"])
+            price_inr = round(price_total * rate, 2)
             
             flights.append({
                 "id": offer.get("id", ""),
                 "price_total": price_info.get("grandTotal", ""),
-                "price_inr": price_total,
-                "price_currency": price_info.get("currency", "INR"),
+                "price_inr": price_inr,
+                "price_currency": "INR",
                 "price_per_traveler": price_info.get("total", ""),
                 "itineraries": itineraries,
                 "booking_class": offer.get("travelerPricings", [{}])[0].get("fareDetailsBySegment", [{}])[0].get("cabin", "ECONOMY"),

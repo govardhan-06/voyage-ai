@@ -1,15 +1,35 @@
 from typing import TypedDict, List, Optional, Annotated
 from operator import add
 
+
+def add_messages(left: list, right: list) -> list:
+    """
+    Custom message reducer that adds new messages and applies pruning.
+    
+    This replaces the simple 'add' operator to include memory management.
+    """
+    from src.agent.utils.memory import prune_messages, MAX_MESSAGES_PER_NODE
+    
+    # Combine messages
+    combined = (left or []) + (right or [])
+    
+    # Apply pruning if we exceed limits
+    if len(combined) > MAX_MESSAGES_PER_NODE:
+        combined = prune_messages(combined)
+    
+    return combined
+
+
 class AgentState(TypedDict):
     """Full state flowing through the LangGraph travel planning pipeline."""
     
     # User context (set by initializer)
     user_id: str
     user_preferences: dict
+    current_date: str  # YYYY-MM-DD for LLM and date validation (departure/arrival must be >= this)
     
-    # Conversation
-    messages: Annotated[list, add]  # append-only message list
+    # Conversation (with automatic pruning)
+    messages: Annotated[list, add_messages]  # message list with memory management
     
     # Node 1: Intent + Slot Filling
     trip_request: dict           # structured slots extracted
